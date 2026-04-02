@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>가상투어 에디터</title>
   <link rel="stylesheet" href="editor.css">
+  <script src="https://cdn.jsdelivr.net/npm/marzipano@0.10.2/dist/marzipano.js"></script>
 </head>
 <body>
 
@@ -54,11 +55,7 @@
             </svg>
           </div>
         </div>
-
-        <div class="lp-scroll" id="scene-list">
-          <!-- JS에서 tour.json 기반 렌더링 -->
-        </div>
-
+        <div class="lp-scroll" id="scene-list"></div>
         <div class="lp-bottom">
           <div class="lp-bottom-btn" id="btn-undo" onclick="Editor.undo()" title="실행 취소 (Ctrl+Z)">
             <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
@@ -163,18 +160,15 @@
         <div class="s-menu"     id="sm-security"  onclick="Settings.sw('security')">보안 설정</div>
         <div class="s-menu"     id="sm-etc"       onclick="Settings.sw('etc')">기타 설정</div>
       </div>
-      <div class="settings-right" id="settings-right">
-        <!-- Settings.render()가 내용 채움 -->
-      </div>
+      <div class="settings-right" id="settings-right"></div>
     </div>
   </div>
 
 </div>
 
-<!-- ===== 사진 추가 모달 ===== -->
+<!-- 사진 추가 모달 -->
 <div class="modal-overlay" id="modal-add-photo" style="display:none;" onclick="PhotoModal.onOverlayClick(event)">
   <div class="modal-box">
-
     <div class="modal-header">
       <div>
         <div class="modal-title">사진 추가</div>
@@ -187,16 +181,10 @@
         </svg>
       </div>
     </div>
-
-    <!-- 그룹 선택 -->
     <div class="modal-group-row">
       <span class="modal-group-label">추가할 그룹</span>
-      <select class="modal-group-select" id="modal-group-select">
-        <!-- JS에서 채움 -->
-      </select>
+      <select class="modal-group-select" id="modal-group-select"></select>
     </div>
-
-    <!-- 드롭존 -->
     <div class="modal-dropzone" id="modal-dropzone"
          ondragover="PhotoModal.onDragOver(event)"
          ondragleave="PhotoModal.onDragLeave(event)"
@@ -218,8 +206,6 @@
         <span class="dz-rule">파일명 → 장면 이름 자동 설정</span>
       </div>
     </div>
-
-    <!-- 파일 목록 (추가 후 표시) -->
     <div class="modal-file-list" id="modal-file-list" style="display:none;">
       <div class="mfl-header">
         <span class="mfl-count" id="mfl-count">0개 파일</span>
@@ -230,12 +216,10 @@
       </div>
       <div class="mfl-grid" id="mfl-grid"></div>
     </div>
-
     <div class="modal-footer">
       <div class="modal-btn-cancel" onclick="PhotoModal.close()">취소</div>
       <div class="modal-btn-confirm" id="modal-btn-confirm" onclick="PhotoModal.confirm()">장면에 추가</div>
     </div>
-
   </div>
 </div>
 

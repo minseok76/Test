@@ -1,385 +1,493 @@
-// viewer/viewer.js — 뷰어 메인 로직
-import { loadTourData, getScenesByGroup } from '../core/loader.js';
-import { initViewer, buildScenes, getScene as getMarzipanoScene, setAutoRotate } from '../core/renderer.js';
-import { initSceneManager, switchScene, onSceneChange, getCurrentSceneId } from '../core/sceneManager.js';
-import { renderHotspots } from '../core/hotspot.js';
-import CONFIG from '../config.js';
+'use strict';
 
+/* ============================================================
+   데이터 로드
+   우선순위: 1) sessionStorage(에디터 미리보기)
+             2) ../data/tour.json
+   ============================================================ */
 let tourData = null;
-let uiVisible = true;
-let gridOpen = false;
-let projOpen = false;
-let currentGroupId = null;
-let infoSlideIdx = 0;
-let infoSlideImages = [];
-let startPopupTimer = null;
+let _viewer  = null;
+let _scenes  = {};
+let _currentId = null;
+let _uiHidden  = false;
+let _projPopupOpen = false;
+let _popupTimer = null;
 
-// ── 초기화 ──────────────────────────────────────
-async function init() {
+async function loadData() {
+  // 에디터 미리보기용 sessionStorage 우선
+  const stored = sessionStorage.getItem('preview_tour_data');
+  if (stored) {
+    try { tourData = JSON.parse(stored); return; } catch(e) {}
+  }
+  // ✅ 수정 1: 파일명 tour-data.json → tour.json
   try {
-    tourData = await loadTourData(CONFIG.DATA_PATH);
-    const panoEl = document.getElementById('pano');
+    const res = await fetch('../data/tour.json');
+    if (!res.ok) throw new Error('fetch failed');
+    tourData = await res.json();
+  } catch(e) {
+    console.warn('tour.json 로드 실패. 샘플 데이터 사용.');
+    tourData = _sampleData();
+  }
+}
 
-    // Marzipano 초기화
-    initViewer(panoEl);
-    buildScenes(tourData);
+function _sampleData() {
+  // ✅ 수정 2: tour.json 구조에 맞춘 샘플 데이터
+  return {
+    tour: {
+      id: 'sample',
+      title: '가상투어',
+      startSceneId: 'sc-sample',
+      autoRotate: false,
+      autoRotateSpeed: 0.3
+    },
+    security: { editorPin: '1234', monitorPin: '5678' },
+    display: { showSceneTitle: true, showFullscreenBtn: true, showNavigation: true },
+    navigation: { fov: { min: 30, max: 120, default: 90 }, gyroscope: true, keyboardControl: true },
+    branding: {
+      watermark: { show: false, name: '', linkEnabled: false },
+      barrier: { show: true },
+      nadirPatch: { enabled: false },
+      logos: []
+    },
+    startPopup: { enabled: false },
+    groups: [{ id: 'g-sample', label: '샘플', color: '#50C8A0' }],
+    scenes: [{
+      id: 'sc-sample', groupId: 'g-sample', label: '샘플 장면',
+      panoSrc: '', thumbSrc: '',
+      initialView: { yaw: 0, pitch: 0, fov: 90 },
+      hotspots: []
+    }]
+  };
+}
 
-    // 핫스팟 등록
-    tourData.scenes.forEach(sceneData => {
-      const mzScene = getMarzipanoScene(sceneData.id);
-      if (mzScene) {
-        renderHotspots(mzScene, sceneData, { onInfo: openInfoPopup });
+/* ============================================================
+   Viewer — 메인 컨트롤러
+   ============================================================ */
+const Viewer = (() => {
+
+  async function init() {
+    await loadData();
+    if (!tourData) return;
+
+    // ✅ 수정 3: tour.json 구조 기준 (tourData.tour.title)
+    document.title = tourData.tour?.title || '가상투어';
+
+    _initMarzipano();
+    _buildAllScenes();
+    _buildNav();
+    _buildGrid();
+    _applySettings();
+    _bindKeys();
+
+    // ✅ 수정 4: startSceneId (tour.json 필드명)
+    const startId = tourData.tour?.startSceneId || tourData.scenes[0]?.id;
+    _goScene(startId, false);
+
+    // ✅ 수정 9: 팝업 enabled 체크 후 클래스 처리
+    const overlay = document.getElementById('start-popup-overlay');
+    if (!tourData.startPopup?.enabled) {
+      overlay.classList.add('hide');
+    } else {
+      _showStartPopup();
+    }
+  }
+
+  /* ── Marzipano 초기화 ── */
+  function _initMarzipano() {
+    const container = document.getElementById('viewer');
+    _viewer = new Marzipano.Viewer(container, {
+      controls: { mouseViewMode: 'drag' }
+    });
+    // ✅ 수정 5: navigation.gyroscope (tour.json 필드명)
+    if (tourData.navigation?.gyroscope && window.DeviceOrientationEvent) {
+      const gyro = new Marzipano.DeviceOrientationControlMethod();
+      _viewer.controls().registerMethod('gyro', gyro);
+    }
+  }
+
+  /* ── 전체 씬 빌드 ── */
+  function _buildAllScenes() {
+    // ✅ 수정 6: navigation.fov.default, scenes[] flat 구조
+    const fovDeg  = tourData.navigation?.fov?.default || 90;
+    const fov     = fovDeg * Math.PI / 180;
+    const fovMin  = (tourData.navigation?.fov?.min || 30)  * Math.PI / 180;
+    const fovMax  = (tourData.navigation?.fov?.max || 120) * Math.PI / 180;
+    const limiter = Marzipano.RectilinearView.limit.traditional(fovMax, fovMin);
+
+    tourData.scenes.forEach(sc => {
+      if (!sc.panoSrc) return;
+      const source   = Marzipano.ImageUrlSource.fromString(sc.panoSrc);
+      const geometry = new Marzipano.EquirectGeometry([{ width: 4096 }]);
+      const initYaw   = (sc.initialView?.yaw   || 0) * Math.PI / 180;
+      const initPitch = (sc.initialView?.pitch  || 0) * Math.PI / 180;
+      const initFov   = (sc.initialView?.fov    || fovDeg) * Math.PI / 180;
+      const view = new Marzipano.RectilinearView({ yaw: initYaw, pitch: initPitch, fov: initFov }, limiter);
+      _scenes[sc.id] = _viewer.createScene({ source, geometry, view });
+    });
+  }
+
+  /* ── 네비게이션 UI 빌드 ── */
+  function _buildNav() {
+    const gRow = document.getElementById('g-row');
+    const tRow = document.getElementById('t-row');
+    gRow.innerHTML = '';
+    tRow.innerHTML = '';
+
+    // ✅ 수정 7: groups[] + scenes[] 분리 구조
+    tourData.groups.forEach((grp, i) => {
+      const hasScenes = tourData.scenes.some(s => s.groupId === grp.id);
+      if (!hasScenes) return;
+      const tab = document.createElement('div');
+      tab.className = 'g-tab' + (i === 0 ? ' active' : '');
+      tab.textContent = grp.label;  // ✅ name → label
+      tab.dataset.groupId = grp.id;
+      tab.addEventListener('click', () => _selectGroup(grp.id));
+      gRow.appendChild(tab);
+    });
+
+    const firstGrp = tourData.groups.find(g => tourData.scenes.some(s => s.groupId === g.id));
+    if (firstGrp) _renderThumbs(firstGrp.id);
+  }
+
+  function _selectGroup(groupId) {
+    document.querySelectorAll('.g-tab').forEach(t =>
+      t.classList.toggle('active', t.dataset.groupId === groupId)
+    );
+    _renderThumbs(groupId);
+  }
+
+  function _renderThumbs(groupId) {
+    const tRow = document.getElementById('t-row');
+    tRow.innerHTML = '';
+    // ✅ 수정: scenes[] flat 구조에서 groupId로 필터
+    const scenes = tourData.scenes.filter(s => s.groupId === groupId);
+    scenes.forEach(sc => {
+      const item = document.createElement('div');
+      item.className = 't-item' + (sc.id === _currentId ? ' active' : '');
+      item.dataset.sceneId = sc.id;
+      item.innerHTML = `
+        <div class="t-thumb">
+          ${sc.thumbSrc
+            ? `<img src="${sc.thumbSrc}" alt="${sc.label}">`
+            : `<span class="t-thumb-label">${sc.label.substring(0,6).toUpperCase()}</span>`}
+        </div>
+        <div class="t-name">${sc.label}</div>`;  // ✅ name → label, thumb → thumbSrc
+      item.addEventListener('click', () => goScene(sc.id));
+      tRow.appendChild(item);
+    });
+  }
+
+  function _updateThumbActive() {
+    document.querySelectorAll('.t-item').forEach(el =>
+      el.classList.toggle('active', el.dataset.sceneId === _currentId)
+    );
+    const grp = _findGroup(_currentId);
+    if (grp) _selectGroup(grp.id);
+  }
+
+  /* ── 그리드 빌드 ── */
+  function _buildGrid() {
+    const body = document.getElementById('grid-body');
+    body.innerHTML = '';
+    tourData.groups.forEach(grp => {
+      const scenes = tourData.scenes.filter(s => s.groupId === grp.id);
+      if (!scenes.length) return;
+      const section = document.createElement('div');
+      section.innerHTML = `<div class="grid-group-label">${grp.label}</div>`; // ✅ name → label
+      const grid = document.createElement('div');
+      grid.className = 'grid-scenes';
+      scenes.forEach(sc => {
+        const el = document.createElement('div');
+        el.className = 'grid-scene' + (sc.id === _currentId ? ' active' : '');
+        el.dataset.sceneId = sc.id;
+        el.innerHTML = `
+          <div class="grid-scene-thumb">
+            ${sc.thumbSrc ? `<img src="${sc.thumbSrc}" alt="">` : ''}
+          </div>
+          <div class="grid-scene-name">${sc.label}</div>`; // ✅ thumb → thumbSrc, name → label
+        el.addEventListener('click', () => { goScene(sc.id); toggleGrid(); });
+        grid.appendChild(el);
+      });
+      section.appendChild(grid);
+      body.appendChild(section);
+    });
+  }
+
+  /* ── 씬 이동 ── */
+  function goScene(id) {
+    if (id === _currentId) { toggleGrid(); return; }
+    _fadeTransition(() => _goScene(id, true));
+  }
+
+  function _goScene(id, rebuild) {
+    const mScene = _scenes[id];
+    _currentId = id;
+
+    if (mScene) {
+      mScene.switchTo({ transitionDuration: 0 });
+    }
+
+    _renderMarkers(id);
+
+    const sc = tourData.scenes.find(s => s.id === id); // ✅ flat 구조
+    if (sc) {
+      const el = document.getElementById('scene-title');
+      // ✅ display.showSceneTitle, sc.label
+      if (el) el.textContent = tourData.display?.showSceneTitle
+        ? (tourData.tour?.title ? tourData.tour.title + ' · ' : '') + sc.label
+        : '';
+    }
+
+    _updateThumbActive();
+
+    document.querySelectorAll('.grid-scene').forEach(el =>
+      el.classList.toggle('active', el.dataset.sceneId === id)
+    );
+  }
+
+  /* ── 페이드 전환 ── */
+  function _fadeTransition(callback) {
+    const fade = document.getElementById('fade-screen');
+    fade.classList.add('fading');
+    setTimeout(() => {
+      callback();
+      setTimeout(() => fade.classList.remove('fading'), 300);
+    }, 300);
+  }
+
+  /* ── 마커 렌더 ── */
+  function _renderMarkers(sceneId) {
+    document.querySelectorAll('.marker-wrap').forEach(el => el.remove());
+
+    const sc = tourData.scenes.find(s => s.id === sceneId); // ✅ flat 구조
+    const mScene = _scenes[sceneId];
+    if (!sc?.hotspots?.length || !mScene) return; // ✅ markers → hotspots
+
+    sc.hotspots.forEach(m => { // ✅ markers → hotspots
+      const wrap = document.createElement('div');
+      wrap.className = 'marker-wrap';
+
+      const isInfo = m.type === 'info';
+      wrap.innerHTML = `
+        ${m.label ? `<div class="marker-label">${m.label}</div>` : ''}
+        <div class="marker-circle ${isInfo ? 'info' : 'move'}">
+          ${isInfo
+            ? `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="#5a3a00"/>
+               <line x1="12" y1="8" x2="12" y2="12" stroke="#5a3a00"/>
+               <circle cx="12" cy="16" r="0.8" fill="#5a3a00" stroke="none"/></svg>`
+            : `<svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7" stroke="#111"/></svg>`
+          }
+          <div class="marker-pulse ${isInfo ? 'info' : ''}"></div>
+        </div>`;
+
+      wrap.addEventListener('click', () => {
+        if (isInfo) {
+          _showInfoPopup(m);
+        } else if (m.targetSceneId) { // ✅ 수정 8: destScene → targetSceneId
+          goScene(m.targetSceneId);
+        }
+      });
+
+      const yaw   = (m.yaw   || 0) * Math.PI / 180;
+      const pitch = (m.pitch || 0) * Math.PI / 180;
+
+      try {
+        mScene.hotspotContainer().createHotspot(wrap, { yaw, pitch });
+      } catch(e) {
+        console.warn('마커 생성 실패:', e);
       }
     });
+  }
 
-    // 씬 변경 콜백
-    onSceneChange(sceneId => {
-      updateSceneTitle(sceneId);
-      updateThumbActive(sceneId);
-      updateGridActive(sceneId);
-      if (tourData.tour.autoRotate) setAutoRotate(true, tourData.tour.autoRotateSpeed);
+  /* ── 정보 팝업 ── */
+  function _showInfoPopup(marker) {
+    const popup = document.getElementById('info-popup');
+    const body  = document.getElementById('info-popup-body');
+
+    // ✅ 수정 5: content.links[].label (tour.json 구조)
+    const linksHtml = (marker.content?.links || []).map(l => `
+      <a class="info-link-btn" href="${l.url}" target="${l.newTab ? '_blank' : '_self'}" rel="noopener">
+        <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+          <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+        <span>${l.label || l.url}</span>  
+        <span class="info-link-arrow">↗</span>
+      </a>`).join('');
+
+    // ✅ 수정 5: content.description, content.images[0]
+    const imgSrc = marker.content?.images?.[0] || '';
+    body.innerHTML = `
+      ${imgSrc ? `<div class="info-thumb"><img src="${imgSrc}" alt=""></div>` : ''}
+      <div class="info-text">
+        <div class="info-title">${marker.content?.title || marker.label || ''}</div>
+        ${marker.content?.description ? `<div class="info-desc">${marker.content.description}</div>` : ''}
+      </div>
+      ${linksHtml ? `<div class="info-links">${linksHtml}</div>` : ''}`;
+
+    popup.style.display = 'block';
+  }
+
+  function closeInfoPopup() {
+    document.getElementById('info-popup').style.display = 'none';
+  }
+
+  /* ── 설정 적용 ── */
+  function _applySettings() {
+    // ✅ 수정: tour.json branding 구조
+    const wm = document.getElementById('watermark');
+    const watermark = tourData.branding?.watermark;
+    if (watermark?.show && watermark.name) {
+      const link = watermark.linkEnabled && watermark.linkUrl
+        ? `<a href="${watermark.linkUrl}" ${watermark.linkNewTab ? 'target="_blank"' : ''} rel="noopener">${watermark.name}</a>`
+        : watermark.name;
+      wm.innerHTML = link + (watermark.subtext ? `<br><span style="font-size:10px;opacity:0.7;">${watermark.subtext}</span>` : '');
+      wm.style.display = 'block';
+    }
+
+    // 로고 슬롯
+    const logos = tourData.branding?.logos || [];
+    logos.forEach(logo => {
+      const el = document.getElementById('logo-' + logo.position);
+      if (!el || !logo.src) return;
+      const size = logo.size || 48;
+      el.innerHTML = `<img src="${logo.src}" width="${size}" height="${size}" alt="logo" style="border-radius:4px;object-fit:contain;">`;
+      el.style.display = 'block';
     });
 
-    // UI 빌드
-    buildGroupTabs();
-    const startGroup = getGroupOfScene(tourData.tour.startSceneId);
-    if (startGroup) selectGroup(startGroup);
+    // 전체화면 버튼
+    if (!tourData.display?.showFullscreenBtn) {
+      document.getElementById('btn-fs').style.display = 'none';
+    }
 
-    buildGridOverlay();
-    buildWatermark();
-    buildStartPopup();
-    applyDisplay();
-
-    // 씬 시작
-    initSceneManager(tourData.tour.startSceneId);
-
-    // 로딩 숨김
-    setTimeout(() => document.getElementById('loading').classList.add('hide'), 400);
-
-  } catch (err) {
-    console.error('Viewer 초기화 실패:', err);
-    document.getElementById('loading').innerHTML =
-      `<p style="color:rgba(255,100,100,0.8)">데이터를 불러올 수 없습니다</p>`;
+    // 썸네일 네비
+    if (!tourData.display?.showNavigation) {
+      document.getElementById('nav-box').style.display = 'none';
+    }
   }
-}
 
-// ── 그룹 탭 ──────────────────────────────────────
-function buildGroupTabs() {
-  const row = document.getElementById('group-row');
-  row.innerHTML = '';
-  tourData.groups.forEach(g => {
-    const btn = document.createElement('button');
-    btn.className = 'g-tab';
-    btn.textContent = g.label;
-    btn.dataset.groupId = g.id;
-    btn.addEventListener('click', () => selectGroup(g.id));
-    row.appendChild(btn);
-  });
-}
+  /* ── 홈 ── */
+  function goHome() {
+    const id = tourData.tour?.startSceneId || tourData.scenes[0]?.id;
+    goScene(id);
+  }
 
-function selectGroup(groupId) {
-  currentGroupId = groupId;
-  document.querySelectorAll('.g-tab').forEach(t => {
-    t.classList.toggle('active', t.dataset.groupId === groupId);
-  });
-  buildThumbs(groupId);
-}
+  /* ── UI 토글 ── */
+  function toggleUI() {
+    _uiHidden = !_uiHidden;
+    document.body.classList.toggle('ui-hidden', _uiHidden);
+    document.getElementById('restore-fab').classList.toggle('show', _uiHidden);
+  }
 
-// ── 썸네일 ──────────────────────────────────────
-function buildThumbs(groupId) {
-  const row = document.getElementById('thumb-row');
-  row.innerHTML = '';
-  const scenes = getScenesByGroup(tourData, groupId);
-  const curId = getCurrentSceneId();
-  scenes.forEach(s => {
-    const item = document.createElement('div');
-    item.className = 'thumb-item' + (s.id === curId ? ' active' : '');
-    item.dataset.sceneId = s.id;
-    item.innerHTML = `
-      <img class="thumb-img" src="${s.thumbSrc}" alt="${s.label}"
-           onerror="this.style.background='#1a2535';this.removeAttribute('src')">
-      <div class="thumb-name">${s.label}</div>
-    `;
-    item.addEventListener('click', () => switchScene(s.id));
-    row.appendChild(item);
-  });
-}
+  /* ── 그리드 토글 ── */
+  function toggleGrid() {
+    const overlay = document.getElementById('grid-overlay');
+    const btn     = document.getElementById('btn-grid');
+    const show    = !overlay.classList.contains('show');
+    overlay.classList.toggle('show', show);
+    btn.classList.toggle('on', show);
+    if (show) _buildGrid();
+  }
 
-function updateThumbActive(sceneId) {
-  document.querySelectorAll('.thumb-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.sceneId === sceneId);
-  });
-  // 그룹이 달라지면 탭 자동 전환
-  const group = getGroupOfScene(sceneId);
-  if (group && group !== currentGroupId) selectGroup(group);
-}
+  /* ── 프로젝션 팝업 ── */
+  function toggleProjMenu() {
+    _projPopupOpen = !_projPopupOpen;
+    document.getElementById('proj-popup').classList.toggle('show', _projPopupOpen);
+    document.getElementById('btn-proj').classList.toggle('on', _projPopupOpen);
+  }
 
-// ── 씬 타이틀 ──────────────────────────────────
-function updateSceneTitle(sceneId) {
-  const scene = tourData.scenes.find(s => s.id === sceneId);
-  if (!scene) return;
-  const title = document.getElementById('scene-title');
-  if (title) title.textContent = `${tourData.tour.title} · ${scene.label}`;
-}
+  function setProjection(type, el) {
+    document.querySelectorAll('.proj-option').forEach(o => o.classList.remove('active'));
+    el.classList.add('active');
+    _projPopupOpen = false;
+    document.getElementById('proj-popup').classList.remove('show');
+    document.getElementById('btn-proj').classList.remove('on');
+  }
 
-// ── 그리드 오버레이 ──────────────────────────────
-function buildGridOverlay() {
-  const content = document.getElementById('grid-content');
-  content.innerHTML = '';
-  tourData.groups.forEach(g => {
-    const scenes = getScenesByGroup(tourData, g.id);
-    if (!scenes.length) return;
-    const group = document.createElement('div');
-    const curId = getCurrentSceneId();
-    group.innerHTML = `<div class="grid-group-label">${g.label}</div>`;
-    const row = document.createElement('div');
-    row.className = 'grid-scene-row';
-    scenes.forEach(s => {
-      const item = document.createElement('div');
-      item.className = 'grid-item' + (s.id === curId ? ' current' : '');
-      item.dataset.sceneId = s.id;
-      item.innerHTML = `
-        <img src="${s.thumbSrc}" alt="${s.label}"
-             onerror="this.style.background='#1a2535';this.removeAttribute('src')">
-        <div class="grid-item-name">${s.label}</div>
-      `;
-      item.addEventListener('click', () => { toggleGrid(false); switchScene(s.id); });
-      row.appendChild(item);
+  /* ── 전체화면 ── */
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.();
+    } else {
+      document.exitFullscreen?.();
+    }
+  }
+
+  /* ── 시작 팝업 ── */
+  function _showStartPopup() {
+    const cfg = tourData.startPopup;
+    if (!cfg?.enabled) return;
+
+    if (cfg.showDontShowAgain && localStorage.getItem('popup_dismissed') === '1') return;
+
+    const overlay = document.getElementById('start-popup-overlay');
+    const img     = document.getElementById('popup-img');
+    const timerEl = document.getElementById('popup-timer');
+
+    // ✅ 수정: pc.imageSrc / mobile.imageSrc (tour.json 구조)
+    const isMobile = window.innerWidth < 768;
+    const src = isMobile ? cfg.mobile?.imageSrc : cfg.pc?.imageSrc;
+    const linkUrl = isMobile ? cfg.mobile?.linkUrl : cfg.pc?.linkUrl;
+
+    if (src) {
+      img.src = src;
+      img.style.display = 'block';
+      if (linkUrl) {
+        img.style.cursor = 'pointer';
+        img.addEventListener('click', () => window.open(linkUrl));
+      }
+    }
+
+    setTimeout(() => {
+      overlay.classList.remove('hide');
+
+      if (cfg.autoCloseMs > 0) {
+        let remaining = Math.round(cfg.autoCloseMs / 1000);
+        timerEl.textContent = remaining + '초 후 닫힘';
+        _popupTimer = setInterval(() => {
+          remaining--;
+          timerEl.textContent = remaining + '초 후 닫힘';
+          if (remaining <= 0) { clearInterval(_popupTimer); closePopup(); }
+        }, 1000);
+      }
+    }, cfg.delayMs || 0);
+  }
+
+  function closePopup(e) {
+    if (e && e.target !== document.getElementById('start-popup-overlay')) return;
+    clearInterval(_popupTimer);
+    document.getElementById('start-popup-overlay').classList.add('hide');
+    if (document.getElementById('popup-no-again')?.checked) {
+      localStorage.setItem('popup_dismissed', '1');
+    }
+  }
+
+  /* ── 키보드 단축키 ── */
+  function _bindKeys() {
+    if (!tourData.navigation?.keyboardControl) return;
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { closeInfoPopup(); if (_projPopupOpen) toggleProjMenu(); }
+      if (e.key === 'g' || e.key === 'G') toggleGrid();
+      if (e.key === 'h' || e.key === 'H') toggleUI();
+      if (e.key === 'f' || e.key === 'F') toggleFullscreen();
     });
-    group.appendChild(row);
-    content.appendChild(group);
-  });
-}
-
-function updateGridActive(sceneId) {
-  document.querySelectorAll('.grid-item').forEach(el => {
-    el.classList.toggle('current', el.dataset.sceneId === sceneId);
-  });
-}
-
-function toggleGrid(force) {
-  gridOpen = force !== undefined ? force : !gridOpen;
-  document.getElementById('grid-overlay').classList.toggle('show', gridOpen);
-  document.getElementById('btn-grid').classList.toggle('active', gridOpen);
-}
-
-// ── 프로젝션 팝업 ──────────────────────────────
-function toggleProj() {
-  projOpen = !projOpen;
-  document.getElementById('proj-popup').classList.toggle('show', projOpen);
-  document.getElementById('btn-proj').classList.toggle('active', projOpen);
-}
-
-function setProjection(mode, el) {
-  document.querySelectorAll('.proj-opt').forEach(o => o.classList.remove('active'));
-  el.classList.add('active');
-  projOpen = false;
-  document.getElementById('proj-popup').classList.remove('show');
-  document.getElementById('btn-proj').classList.remove('active');
-  // Marzipano 프로젝션 변경
-  const viewer = window._viewer;
-  if (!viewer) return;
-  // 실제 Marzipano에서는 scene.view()로 프로젝션 변경
-}
-
-// ── UI 숨기기/복원 ──────────────────────────────
-function toggleUI() {
-  uiVisible = !uiVisible;
-  ['#bottom-ui','#top-ui','#watermark','#bottom-grad'].forEach(sel => {
-    document.querySelector(sel)?.classList.toggle('ui-hide', !uiVisible);
-  });
-  document.getElementById('restore-btn').classList.toggle('show', !uiVisible);
-}
-
-// ── 전체화면 ──────────────────────────────────
-function toggleFullscreen() {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else document.documentElement.requestFullscreen?.();
-}
-
-// ── 정보 팝업 ──────────────────────────────────
-function openInfoPopup(hs) {
-  const popup = document.getElementById('info-popup');
-  const c = hs.content;
-
-  // 슬라이드 이미지
-  infoSlideImages = c.images || [];
-  infoSlideIdx = 0;
-  renderSlide();
-
-  // 텍스트
-  popup.querySelector('.popup-title').textContent = c.title || '';
-  popup.querySelector('.popup-desc').textContent = c.description || '';
-
-  // 유튜브
-  const yt = popup.querySelector('.popup-youtube');
-  if (c.youtubeUrl) {
-    yt.style.display = 'flex';
-    yt.onclick = () => window.open(c.youtubeUrl, '_blank');
-  } else {
-    yt.style.display = 'none';
   }
 
-  // 링크
-  const linksEl = popup.querySelector('.popup-links');
-  linksEl.innerHTML = '';
-  (c.links || []).forEach(lnk => {
-    const a = document.createElement('a');
-    a.className = 'popup-link-btn';
-    a.href = lnk.url;
-    if (lnk.newTab) a.target = '_blank';
-    a.innerHTML = `
-      <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
-      <span>${lnk.label}</span><span class="arrow">↗</span>
-    `;
-    linksEl.appendChild(a);
-  });
-
-  popup.classList.add('show');
-}
-
-function renderSlide() {
-  const area = document.querySelector('.popup-slide-area');
-  if (!infoSlideImages.length) {
-    area.innerHTML = '<div class="no-img">NO IMAGE</div>';
-    return;
+  /* ── 헬퍼 ── */
+  function _findGroup(sceneId) {
+    const sc = tourData.scenes.find(s => s.id === sceneId);
+    if (!sc) return null;
+    return tourData.groups.find(g => g.id === sc.groupId) || null;
   }
-  const img = infoSlideImages[infoSlideIdx];
-  area.innerHTML = `
-    <img src="${img.src}" alt="${img.alt || ''}">
-    ${infoSlideImages.length > 1 ? `
-      <div class="slide-arr" style="left:5px" onclick="window._slideChange(-1)">
-        <svg viewBox="0 0 14 14"><path d="M9 2L4 7L9 12"/></svg>
-      </div>
-      <div class="slide-arr" style="right:5px" onclick="window._slideChange(1)">
-        <svg viewBox="0 0 14 14"><path d="M5 2L10 7L5 12"/></svg>
-      </div>
-      <div class="slide-dots">${infoSlideImages.map((_,i)=>`<div class="slide-dot${i===infoSlideIdx?' active':''}" onclick="window._goSlide(${i})"></div>`).join('')}</div>
-    ` : ''}
-  `;
-}
 
-window._slideChange = (d) => {
-  infoSlideIdx = (infoSlideIdx + d + infoSlideImages.length) % infoSlideImages.length;
-  renderSlide();
-};
-window._goSlide = (i) => { infoSlideIdx = i; renderSlide(); };
+  return {
+    init,
+    goScene, goHome,
+    toggleUI, toggleGrid, toggleProjMenu, setProjection,
+    toggleFullscreen,
+    closePopup, closeInfoPopup,
+  };
+})();
 
-function closeInfoPopup() {
-  document.getElementById('info-popup').classList.remove('show');
-}
-
-// ── 시작 팝업 ──────────────────────────────────
-function buildStartPopup() {
-  const sp = tourData.startPopup;
-  if (!sp.enabled) return;
-
-  const dontShow = localStorage.getItem('sp_hide_' + tourData.tour.id);
-  if (dontShow) return;
-
-  const isMobile = window.innerWidth < 768;
-  const imgData = isMobile ? sp.mobile : sp.pc;
-  if (!imgData.imageSrc) return;
-
-  const popup = document.getElementById('start-popup');
-  const modal = popup.querySelector('.sp-modal');
-  modal.innerHTML = `
-    <a href="${imgData.linkUrl || '#'}" ${imgData.linkUrl ? 'target="_blank"' : ''}>
-      <img class="sp-img" src="${imgData.imageSrc}" alt="안내">
-    </a>
-    <div class="sp-footer">
-      ${sp.showDontShowAgain ? `<span class="sp-skip" id="sp-skip">다시 보지 않기</span>` : '<span></span>'}
-      <span class="sp-timer" id="sp-timer">${sp.autoCloseMs > 0 ? sp.autoCloseMs/1000 + '초 후 닫힘' : ''}</span>
-      <span class="sp-close" id="sp-close">닫기 ✕</span>
-    </div>
-  `;
-
-  setTimeout(() => popup.classList.add('show'), sp.delayMs);
-
-  document.getElementById('sp-close')?.addEventListener('click', closeStartPopup);
-  document.getElementById('sp-skip')?.addEventListener('click', () => {
-    localStorage.setItem('sp_hide_' + tourData.tour.id, '1');
-    closeStartPopup();
-  });
-
-  if (sp.autoCloseMs > 0) {
-    let rem = sp.autoCloseMs / 1000;
-    startPopupTimer = setInterval(() => {
-      rem--;
-      const el = document.getElementById('sp-timer');
-      if (el) el.textContent = rem + '초 후 닫힘';
-      if (rem <= 0) closeStartPopup();
-    }, 1000);
-  }
-}
-
-function closeStartPopup() {
-  document.getElementById('start-popup').classList.remove('show');
-  if (startPopupTimer) clearInterval(startPopupTimer);
-}
-
-// ── 제작자 표시 ──────────────────────────────────
-function buildWatermark() {
-  const wm = tourData.branding.watermark;
-  const el = document.getElementById('watermark');
-  if (!wm.show) { el.style.display = 'none'; return; }
-  el.innerHTML = wm.linkEnabled
-    ? `<a href="${wm.linkUrl}" ${wm.linkNewTab ? 'target="_blank"' : ''}>
-         <div class="wm-name">${wm.name}</div>
-         ${wm.subtext ? `<div class="wm-sub">${wm.subtext}</div>` : ''}
-       </a>`
-    : `<div class="wm-name">${wm.name}</div>
-       ${wm.subtext ? `<div class="wm-sub">${wm.subtext}</div>` : ''}`;
-}
-
-// ── display 설정 적용 ────────────────────────────
-function applyDisplay() {
-  const d = tourData.display;
-  const titleEl = document.getElementById('scene-title');
-  if (titleEl) titleEl.style.display = d.showSceneTitle ? '' : 'none';
-  const navBox = document.getElementById('nav-box');
-  if (navBox) navBox.style.display = d.showNavigation ? '' : 'none';
-  const fsBtn = document.getElementById('btn-fs');
-  if (fsBtn) fsBtn.style.display = d.showFullscreenBtn ? '' : 'none';
-}
-
-// ── 유틸 ──────────────────────────────────────
-function getGroupOfScene(sceneId) {
-  const scene = tourData?.scenes.find(s => s.id === sceneId);
-  return scene?.groupId || null;
-}
-
-// ── 전역 이벤트 바인딩 (HTML에서 호출) ────────────
-window.onViewerLoad = init;
-window.toggleGrid = toggleGrid;
-window.toggleProj = toggleProj;
-window.setProjection = setProjection;
-window.toggleUI = toggleUI;
-window.toggleFullscreen = toggleFullscreen;
-window.goHome = () => switchScene(tourData.tour.startSceneId);
-window.closeInfoPopup = closeInfoPopup;
-window.closeStartPopup = closeStartPopup;
-
-// ── 관리자 단축키 ─────────────────────────────────
-document.addEventListener('keydown', e => {
-  if (!e.ctrlKey || !e.shiftKey) return;
-  if (e.key === 'E' || e.key === 'e') {
-    e.preventDefault();
-    window.location.href = '../editor/index.html';
-  }
-  if (e.key === 'S' || e.key === 's') {
-    e.preventDefault();
-    window.location.href = '../monitor/index.html';
-  }
-});
-
-// 팝업 외부 클릭 닫기
-document.addEventListener('click', e => {
-  const projBtn = document.getElementById('btn-proj');
-  const projPopup = document.getElementById('proj-popup');
-  if (projOpen && projPopup && !projPopup.contains(e.target) && e.target !== projBtn) {
-    projOpen = false;
-    projPopup.classList.remove('show');
-    projBtn?.classList.remove('active');
-  }
-});
+/* ============================================================
+   진입점
+   ============================================================ */
+document.addEventListener('DOMContentLoaded', () => Viewer.init());
