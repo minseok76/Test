@@ -289,6 +289,7 @@ body {
 .center-bg {
   position: absolute; inset: 0;
   background: linear-gradient(160deg, #1a3040, #243d30 50%, #1e3548);
+  z-index: 0;
 }
 .fov-ring {
   position: absolute; top: 50%; left: 50%;
@@ -297,16 +298,18 @@ body {
   border-radius: 50%;
   border: 1.5px solid rgba(100,160,255,0.3);
   pointer-events: none;
+  z-index: 10;
 }
 .fov-ch { position: absolute; top: 50%; left: 0; right: 0; height: 0.5px; background: rgba(100,160,255,0.3); transform: translateY(-50%); }
 .fov-cv { position: absolute; left: 50%; top: 0; bottom: 0; width: 0.5px; background: rgba(100,160,255,0.3); transform: translateX(-50%); }
 
-.marker-layer { position: absolute; inset: 0; }
+.marker-layer { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
 
 .marker {
   position: absolute;
   cursor: move;
   transform: translate(-50%, -50%);
+  pointer-events: all;
 }
 .m-dot {
   width: 26px; height: 26px;
@@ -514,6 +517,16 @@ body {
 }
 .toggle.on .toggle-knob { left: 17px; }
 .s-desc { font-size: 10px; color: rgba(255,255,255,0.28); line-height: 1.5; }
+
+/* 마커 패널 공용 */
+.fl { font-size: 10px; color: rgba(255,255,255,0.35); margin-bottom: 3px; }
+.fv {
+  font-size: 12px; color: rgba(255,255,255,0.82);
+  background: rgba(255,255,255,0.06);
+  border: 0.5px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
 
 /* ===== PHOTO MODAL ===== */
 .modal-overlay {

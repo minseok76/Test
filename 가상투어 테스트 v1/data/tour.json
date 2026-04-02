@@ -1,134 +1,149 @@
 {
-  "_schema": "1.0.0",
   "tour": {
-    "id": "ajou-youth-center",
-    "title": "아주청소년문화의집 가상투어",
+    "title": "가상투어",
     "subtitle": "",
-    "startSceneId": "scene_entrance",
-    "autoRotate": true,
-    "autoRotateSpeed": 0.3,
-    "defaultFov": 90
+    "startScene": "entrance",
+    "autoRotate": true
   },
+
   "security": {
     "editorPin": "1234",
-    "monitorPin": "5678",
-    "showHint": false
+    "monitorPin": "5678"
   },
+
   "display": {
-    "showSceneTitle": true,
-    "showCoords": false,
-    "showNavigation": true,
-    "showFullscreenBtn": true,
-    "defaultProjection": "normal"
+    "sceneTitle": true,
+    "coordinates": false,
+    "thumbnailNav": true,
+    "fullscreenBtn": true
   },
+
   "navigation": {
-    "fov": { "min": 30, "max": 120, "default": 90 },
-    "mouseSensitivity": 1.0,
-    "keyboardControl": true,
-    "gyroscope": true
+    "fov": 90,
+    "sensitivity": 1.0,
+    "keyboard": true,
+    "gyro": true
   },
+
   "branding": {
-    "logos": [],
+    "logos": {
+      "tl": { "src": "", "link": "" },
+      "tr": { "src": "", "link": "" },
+      "bl": { "src": "", "link": "" },
+      "br": { "src": "", "link": "" }
+    },
+    "logoSize": 48,
+    "logoAction": "none",
+
     "watermark": {
       "show": true,
-      "name": "아주청소년운영위원회 조타",
-      "subtext": "",
+      "name": "제작자",
+      "sub": "",
       "linkEnabled": true,
-      "linkUrl": "https://www.youth.kr",
-      "linkNewTab": true
+      "url": "https://www.youth.kr",
+      "newTab": true
     },
-    "barrier": { "show": true, "heightMode": "auto", "customHeight": 40, "opacity": 85, "color": "#000000" },
-    "nadirPatch": { "enabled": false, "src": "", "size": 25, "opacity": 1.0, "pitch": -90 }
+
+    "barrier": {
+      "show": true,
+      "mode": "auto",
+      "height": 40,
+      "opacity": 85
+    },
+
+    "nadir": {
+      "show": false,
+      "src": "",
+      "size": 25
+    }
   },
+
   "startPopup": {
-    "enabled": false,
-    "delayMs": 500,
-    "autoCloseMs": 5000,
-    "showDontShowAgain": true,
-    "pc": { "imageSrc": "", "linkUrl": "" },
-    "mobile": { "imageSrc": "", "linkUrl": "" }
+    "enabled": true,
+    "delay": 0.5,
+    "duration": 5,
+    "noAgain": true,
+    "pc": {
+      "src": "",
+      "link": ""
+    },
+    "mobile": {
+      "src": "",
+      "link": ""
+    }
   },
+
   "groups": [
-    { "id": "group_outdoor", "label": "외부", "color": "#50A0DC" },
-    { "id": "group_1f",      "label": "1층",  "color": "#C87850" },
-    { "id": "group_2f",      "label": "2층",  "color": "#B4C850" }
+    {
+      "id": "g-out",
+      "name": "외부",
+      "color": "rgba(80,160,220,0.7)"
+    },
+    {
+      "id": "g-1f",
+      "name": "1층",
+      "color": "rgba(200,120,80,0.7)"
+    },
+    {
+      "id": "g-2f",
+      "name": "2층",
+      "color": "rgba(180,200,80,0.6)"
+    }
   ],
+
   "scenes": [
     {
-      "id": "scene_entrance",
-      "groupId": "group_outdoor",
-      "label": "정문",
-      "panoSrc": "assets/panos/sample.jpg",
-      "thumbSrc": "assets/thumbs/sample.jpg",
-      "initialView": { "yaw": 0, "pitch": 0, "fov": 90 },
+      "id": "entrance",
+      "groupId": "g-out",
+      "name": "정문",
+      "panoSrc": "assets/panos/entrance.jpg",
+      "thumbSrc": "assets/thumbs/entrance.jpg",
+      "initialYaw": 0,
+      "initialPitch": 0,
       "hotspots": [
         {
-          "id": "hs_to_lobby",
+          "id": "hs-001",
           "type": "link",
-          "yaw": 30, "pitch": -5,
-          "targetSceneId": "scene_lobby",
-          "label": "내부로 이동",
-          "labelMode": "always"
+          "yaw": 30,
+          "pitch": 0,
+          "destScene": "parking",
+          "label": "자전거 거치대",
+          "labelVisible": true
         },
         {
-          "id": "hs_info_entrance",
+          "id": "hs-002",
           "type": "info",
-          "yaw": -40, "pitch": 5,
-          "label": "시설 안내",
-          "labelMode": "hover",
+          "yaw": -20,
+          "pitch": 5,
+          "label": "안내판",
+          "labelVisible": true,
           "content": {
             "title": "아주청소년문화의집",
-            "description": "청소년들을 위한 다목적 문화·활동 공간입니다.",
+            "desc": "청소년을 위한 복합문화공간입니다.",
             "images": [],
-            "youtubeUrl": "",
-            "links": [
-              { "id": "lnk1", "label": "공식 홈페이지", "url": "https://www.youth.kr", "newTab": true }
-            ]
+            "youtube": "",
+            "link": { "text": "홈페이지", "url": "https://www.youth.kr" }
           }
         }
       ]
     },
     {
-      "id": "scene_lobby",
-      "groupId": "group_1f",
-      "label": "로비",
-      "panoSrc": "assets/panos/sample.jpg",
-      "thumbSrc": "assets/thumbs/sample.jpg",
-      "initialView": { "yaw": 0, "pitch": 0, "fov": 90 },
+      "id": "parking",
+      "groupId": "g-out",
+      "name": "자전거 거치대",
+      "panoSrc": "assets/panos/parking.jpg",
+      "thumbSrc": "assets/thumbs/parking.jpg",
+      "initialYaw": 0,
+      "initialPitch": 0,
       "hotspots": [
         {
-          "id": "hs_back_entrance",
+          "id": "hs-003",
           "type": "link",
-          "yaw": 180, "pitch": -5,
-          "targetSceneId": "scene_entrance",
-          "label": "정문으로",
-          "labelMode": "always"
-        }
-      ]
-    },
-    {
-      "id": "scene_playroom",
-      "groupId": "group_2f",
-      "label": "플레이실",
-      "panoSrc": "assets/panos/sample.jpg",
-      "thumbSrc": "assets/thumbs/sample.jpg",
-      "initialView": { "yaw": 0, "pitch": 0, "fov": 90 },
-      "hotspots": [
-        {
-          "id": "hs_info_play",
-          "type": "info",
-          "yaw": 10, "pitch": 0,
-          "label": "플레이실 안내",
-          "labelMode": "hover",
-          "content": {
-            "title": "플레이실",
-            "description": "청소년들을 위한 다목적 활동 공간입니다.",
-            "images": [],
-            "youtubeUrl": "",
-            "links": [
-              { "id": "lnk2", "label": "예약하기", "url": "https://www.youth.kr/reserve", "newTab": true }
-            ]
-          }
+          "yaw": 180,
+          "pitch": 0,
+          "destScene": "entrance",
+          "label": "정문",
+          "labelVisible": true
         }
       ]
     }
