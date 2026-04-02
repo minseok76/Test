@@ -1,131 +1,118 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>가상투어</title>
-  <link rel="stylesheet" href="viewer.css">
-  <script src="https://cdn.jsdelivr.net/npm/marzipano@0.10.2/dist/marzipano.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="description" content="가상투어">
+<title>가상투어</title>
+<link rel="stylesheet" href="viewer.css">
+<!-- Marzipano CDN -->
+<script src="https://cdn.jsdelivr.net/npm/marzipano@0.10.2/dist/marzipano.js"></script>
 </head>
 <body>
 
-<!-- 파노라마 뷰어 컨테이너 -->
-<div id="viewer"></div>
+<!-- ① Marzipano 렌더 영역 -->
+<div id="pano"></div>
 
-<!-- 로고 슬롯 4개 -->
-<div id="logo-tl" class="logo-slot logo-tl"></div>
-<div id="logo-tr" class="logo-slot logo-tr"></div>
-<div id="logo-bl" class="logo-slot logo-bl"></div>
-<div id="logo-br" class="logo-slot logo-br"></div>
+<!-- ② 페이드 오버레이 -->
+<div id="fade"></div>
 
-<!-- 제작자 표시 -->
-<div id="watermark" class="watermark"></div>
+<!-- ③ 로딩 화면 -->
+<div id="loader">
+  <div class="spinner"></div>
+  <div class="loader-txt">불러오는 중...</div>
+</div>
 
-<!-- 하단 그라디언트 -->
-<div id="bottom-grad" class="bottom-grad"></div>
+<!-- ④ 로고 (우상단) -->
+<div id="logo-wrap">
+  <div id="logo-btn"></div>
+</div>
 
-<!-- 하단 UI -->
-<div id="bottom-ui" class="bottom-ui">
-  <div class="bottom-inner">
+<!-- ⑤ 하단 그라데이션 -->
+<div id="bg-grad"></div>
 
+<!-- ⑥ 제작자 표시 -->
+<div id="watermark"></div>
+
+<!-- ⑦ 하단 가림막 -->
+<div id="barrier"></div>
+
+<!-- ⑧ 하단 UI -->
+<div id="ui">
+  <div class="bc">
     <!-- 씬 타이틀 -->
-    <div id="scene-title" class="scene-title"></div>
+    <div id="scene-title"></div>
 
-    <!-- 네비게이션 박스 -->
-    <div class="nav-box" id="nav-box">
-      <!-- 그룹 탭 -->
+    <!-- 네비 박스 (그룹 탭 + 썸네일) -->
+    <div class="nav-box">
       <div class="g-row" id="g-row"></div>
-      <!-- 씬 썸네일 -->
       <div class="t-row" id="t-row"></div>
     </div>
 
-    <!-- 콘솔 버튼 행 -->
-    <div class="console-row">
-      <div class="console">
+    <!-- 콘솔 + 숨기기 버튼 -->
+    <div style="display:flex;align-items:center;gap:5px;position:relative;">
+      <div class="console-row">
         <!-- 홈 -->
-        <div class="cb" id="btn-home" onclick="Viewer.goHome()" title="처음 장면">
+        <div class="cb" onclick="goHome()" title="홈">
           <svg viewBox="0 0 24 24"><path d="M3 9.5L12 3L21 9.5V20a1 1 0 01-1 1H15v-5h-6v5H4a1 1 0 01-1-1V9.5z"/></svg>
         </div>
-        <div class="cs"></div>
+        <div class="sep"></div>
         <!-- 그리드 -->
-        <div class="cb" id="btn-grid" onclick="Viewer.toggleGrid()" title="전체 장면">
+        <div class="cb" id="grid-btn" onclick="toggleGrid()" title="전체 장면">
           <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
         </div>
-        <div class="cs"></div>
+        <div class="sep"></div>
         <!-- 프로젝션 -->
-        <div class="cb" id="btn-proj" onclick="Viewer.toggleProjMenu()" title="프로젝션">
+        <div class="cb" id="proj-btn" onclick="toggleProj()" title="프로젝션">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="4"/><line x1="3" y1="12" x2="21" y2="12"/></svg>
         </div>
-        <div class="cs"></div>
+        <div class="sep"></div>
         <!-- 전체화면 -->
-        <div class="cb" id="btn-fs" onclick="Viewer.toggleFullscreen()" title="전체화면">
+        <div class="cb" onclick="toggleFullscreen()" title="전체화면">
           <svg viewBox="0 0 24 24"><path d="M4 8V4h4M16 4h4v4M4 16v4h4M20 16v4h-4"/></svg>
         </div>
       </div>
 
-      <!-- UI 숨기기 버튼 -->
-      <div class="hide-btn" id="btn-hide" onclick="Viewer.toggleUI()" title="UI 숨기기">
-        <svg viewBox="0 0 14 14"><path d="M2 4l5 5 5-5" stroke-width="1.8"/></svg>
+      <!-- 숨기기 버튼 -->
+      <div id="hide-btn" onclick="toggleHide()" title="UI 숨기기">
+        <svg viewBox="0 0 14 14"><path d="M2 4l5 5 5-5" stroke-width="1.9"/></svg>
       </div>
 
       <!-- 프로젝션 팝업 -->
-      <div class="proj-popup" id="proj-popup">
-        <div class="proj-option active" id="proj-normal" onclick="Viewer.setProjection('normal',this)">
-          <div class="proj-icon"><svg viewBox="0 0 24 24"><polygon points="12,3 22,20 2,20"/></svg></div>
-          <span class="proj-label">Normal</span>
+      <div id="proj-popup">
+        <div class="po on" onclick="selectProj('n',this)">
+          <div class="pi"><svg viewBox="0 0 24 24"><polygon points="12,3 22,20 2,20"/></svg></div>
+          <span class="pl">Normal</span>
         </div>
-        <div class="proj-option" id="proj-mirror" onclick="Viewer.setProjection('mirror',this)">
-          <div class="proj-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="4"/></svg></div>
-          <span class="proj-label">Mirror Ball</span>
+        <div class="po" onclick="selectProj('m',this)">
+          <div class="pi"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="4"/></svg></div>
+          <span class="pl">Mirror Ball</span>
         </div>
-        <div class="proj-option" id="proj-planet" onclick="Viewer.setProjection('planet',this)">
-          <div class="proj-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="17" r="6"/><path d="M6 17 Q12 2 18 17"/></svg></div>
-          <span class="proj-label">Little Planet</span>
+        <div class="po" onclick="selectProj('p',this)">
+          <div class="pi"><svg viewBox="0 0 24 24"><circle cx="12" cy="17" r="6"/><path d="M6 17 Q12 2 18 17"/></svg></div>
+          <span class="pl">Little Planet</span>
         </div>
       </div>
     </div>
-
   </div>
 </div>
 
-<!-- UI 복원 FAB (숨김 상태에서만 보임) -->
-<div class="restore-fab" id="restore-fab" onclick="Viewer.toggleUI()">
-  <svg viewBox="0 0 14 14"><path d="M2 10l5-5 5 5" stroke-width="1.8"/></svg>
+<!-- ⑨ 복원 버튼 (UI 숨긴 후 표시) -->
+<div id="restore-btn" onclick="toggleHide()" title="UI 복원">
+  <svg viewBox="0 0 14 14"><path d="M2 10l5-5 5 5" stroke-width="2.2"/></svg>
 </div>
 
-<!-- 그리드 오버레이 -->
-<div class="grid-overlay" id="grid-overlay">
-  <div class="grid-header">
-    <span class="grid-title">전체 장면</span>
-    <div class="grid-close" onclick="Viewer.toggleGrid()">닫기 ✕</div>
+<!-- ⑩ 그리드 오버레이 -->
+<div id="grid-overlay">
+  <div style="padding:12px 16px 7px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+    <span style="font-size:14px;font-weight:500;color:#fff;">전체 장면</span>
+    <div onclick="toggleGrid()" style="cursor:pointer;padding:3px 13px;background:rgba(255,255,255,0.1);border-radius:20px;font-size:11px;color:rgba(255,255,255,0.6);">닫기 ✕</div>
   </div>
-  <div class="grid-body" id="grid-body"></div>
+  <div id="grid-body" style="padding:0 16px 16px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px;"></div>
 </div>
 
-<!-- 씬 전환 블랙 스크린 -->
-<div class="fade-screen" id="fade-screen"></div>
-
-<!-- 시작 팝업 -->
-<div class="start-popup-overlay" id="start-popup-overlay" onclick="Viewer.closePopup(event)">
-  <div class="start-popup" id="start-popup">
-    <img id="popup-img" src="" alt="" style="display:none;">
-    <div class="popup-footer">
-      <label class="popup-no-again">
-        <input type="checkbox" id="popup-no-again"> 다시 보지 않기
-      </label>
-      <span class="popup-timer" id="popup-timer"></span>
-      <button class="popup-close-btn" onclick="Viewer.closePopup()">닫기</button>
-    </div>
-  </div>
-</div>
-
-<!-- 정보 마커 팝업 -->
-<div class="info-popup" id="info-popup" style="display:none;">
-  <div class="info-popup-close" onclick="Viewer.closeInfoPopup()">
-    <svg viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg>
-  </div>
-  <div class="info-popup-body" id="info-popup-body"></div>
-</div>
+<!-- ⑪ 정보 팝업 -->
+<div id="info-popup"></div>
 
 <script src="viewer.js"></script>
 </body>

@@ -1,498 +1,532 @@
-'use strict';
+/**
+ * viewer.js — 가상투어 뷰어 메인 로직
+ * tour.json → Marzipano 씬 빌드 → UI 렌더
+ */
 
-/* ============================================================
-   데이터 로드
-   우선순위: 1) sessionStorage(에디터 미리보기)
-             2) ../data/tour-data.json
-   ============================================================ */
-let tourData = null;
-let _viewer  = null;         // Marzipano Viewer
-let _scenes  = {};           // { sceneId: Marzipano Scene }
-let _currentId = null;
-let _uiHidden  = false;
-let _projPopupOpen = false;
-let _popupTimer = null;
+// ─── 전역 상태 ───────────────────────────────────────────
+let _data = null;          // tour.json 전체
+let _viewer = null;        // Marzipano 뷰어
+let _scenes = {};          // { sceneId: { mzScene, data } }
+let _currentId = null;     // 현재 씬 ID
+let _uiHidden = false;     // UI 숨김 여부
+let _projOpen = false;     // 프로젝션 팝업 열림
+let _gridOpen = false;     // 그리드 오버레이 열림
+let _slideIdx = 0;         // 정보팝업 슬라이드 인덱스
+let _slideData = [];       // 현재 슬라이드 이미지 배열
 
-async function loadData() {
-  // 에디터 미리보기용 sessionStorage 우선
-  const stored = sessionStorage.getItem('preview_tour_data');
-  if (stored) {
-    try { tourData = JSON.parse(stored); return; } catch(e) {}
-  }
-  // 실제 JSON 파일
+// ─── 초기화 ──────────────────────────────────────────────
+async function init() {
   try {
-    const res = await fetch('../data/tour-data.json');
-    if (!res.ok) throw new Error('fetch failed');
-    tourData = await res.json();
-  } catch(e) {
-    console.warn('tour-data.json 로드 실패. 샘플 데이터 사용.');
-    tourData = _sampleData();
-  }
-}
+    // 1. tour.json 로드
+    const res = await fetch('../data/tour.json');
+    if (!res.ok) throw new Error('tour.json 로드 실패');
+    _data = await res.json();
 
-function _sampleData() {
-  return {
-    title: '가상투어',
-    startScene: 'sc-sample',
-    autoRotate: false,
-    groups: [{
-      id: 'g-sample', name: '샘플', color: 'rgba(80,200,160,0.7)',
-      scenes: [{ id: 'sc-sample', name: '샘플 장면', thumb: '', panoSrc: '', markers: [] }]
-    }],
-    settings: {
-      logo:      { slots: {}, size: 48, action: 'none' },
-      watermark: { show: false, name: '', sub: '', link: '', newTab: true },
-      barrier:   { show: true, mode: 'auto', opacity: 85, color: '#000' },
-      nadir:     { show: false },
-      popup:     { enabled: false, delay: 0, duration: 0, noAgain: true, pcSrc: '', mobileSrc: '', linkUrl: '' },
-      display:   { sceneTitle: true, fullscreen: true, thumbnail: true },
-      nav:       { fov: 90, sensitivity: 1.0, keyboard: true, gyro: true, projection: 'normal' },
-      security:  { editorPin: '1234', monitorPin: '5678' },
-    }
-  };
-}
-
-/* ============================================================
-   Viewer — 메인 컨트롤러
-   ============================================================ */
-const Viewer = (() => {
-
-  /* ── 초기화 ── */
-  async function init() {
-    await loadData();
-    if (!tourData) return;
-
-    document.title = tourData.title || '가상투어';
-
-    _initMarzipano();
-    _buildAllScenes();
-    _buildNav();
-    _buildGrid();
-    _applySettings();
-    _bindKeys();
-
-    // 시작 장면 이동
-    const startId = tourData.startScene || _firstSceneId();
-    _goScene(startId, false);
-
-    // 시작 팝업
-    _showStartPopup();
-  }
-
-  /* ── Marzipano 초기화 ── */
-  function _initMarzipano() {
-    const container = document.getElementById('viewer');
-    _viewer = new Marzipano.Viewer(container, {
+    // 2. Marzipano 뷰어 생성
+    const panoEl = document.getElementById('pano');
+    _viewer = new Marzipano.Viewer(panoEl, {
       controls: { mouseViewMode: 'drag' }
     });
-    // 자이로
-    if (tourData.settings.nav?.gyro && window.DeviceOrientationEvent) {
-      const gyro = new Marzipano.DeviceOrientationControlMethod();
-      _viewer.controls().registerMethod('gyro', gyro);
+
+    // 3. 씬 전체 빌드
+    buildScenes();
+
+    // 4. UI 렌더
+    renderGroups();
+    applyBranding();
+    applyBarrier();
+
+    // 5. 시작 씬으로 이동
+    const startId = _data.tour.startScene || _data.scenes[0].id;
+    switchScene(startId, false);
+
+    // 6. 로딩 화면 제거
+    hideLoader();
+
+    // 7. 자동 회전
+    if (_data.tour.autoRotate) {
+      _viewer.startMovement(Marzipano.autorotate({ yawSpeed: 0.3 }));
+      _viewer.setIdleMovement(3000, Marzipano.autorotate({ yawSpeed: 0.3 }));
     }
+
+    // 8. 시작 팝업
+    if (_data.startPopup?.enabled) {
+      setTimeout(showStartPopup, (_data.startPopup.delay || 0.5) * 1000);
+    }
+
+  } catch (e) {
+    console.error('뷰어 초기화 오류:', e);
+    document.getElementById('loader').querySelector('.loader-txt').textContent = '로드 실패. 이미지 경로를 확인하세요.';
   }
+}
 
-  /* ── 전체 씬 빌드 ── */
-  function _buildAllScenes() {
-    const fov     = (tourData.settings.nav?.fov || 90) * Math.PI / 180;
-    const limiter = Marzipano.RectilinearView.limit.traditional(1024, 100 * Math.PI / 180);
+// ─── Marzipano 씬 빌드 ───────────────────────────────────
+function buildScenes() {
+  const limiter = Marzipano.RectilinearView.limit.traditional(
+    4096, 120 * Math.PI / 180
+  );
 
-    _allScenes().forEach(sc => {
-      if (!sc.panoSrc) return; // 소스 없는 씬 스킵
-      const source   = Marzipano.ImageUrlSource.fromString(sc.panoSrc);
-      const geometry = new Marzipano.EquirectGeometry([{ width: 4096 }]);
-      const view     = new Marzipano.RectilinearView({ yaw: 0, pitch: 0, fov }, limiter);
-      _scenes[sc.id] = _viewer.createScene({ source, geometry, view });
-    });
-  }
-
-  /* ── 네비게이션 UI 빌드 ── */
-  function _buildNav() {
-    const gRow = document.getElementById('g-row');
-    const tRow = document.getElementById('t-row');
-    gRow.innerHTML = '';
-    tRow.innerHTML = '';
-
-    tourData.groups.forEach((grp, i) => {
-      if (!grp.scenes.length) return;
-      const tab = document.createElement('div');
-      tab.className   = 'g-tab' + (i === 0 ? ' active' : '');
-      tab.textContent = grp.name;
-      tab.dataset.groupId = grp.id;
-      tab.addEventListener('click', () => _selectGroup(grp.id));
-      gRow.appendChild(tab);
-    });
-
-    // 첫 그룹 썸네일 렌더
-    const firstGrp = tourData.groups.find(g => g.scenes.length);
-    if (firstGrp) _renderThumbs(firstGrp.id);
-  }
-
-  function _selectGroup(groupId) {
-    document.querySelectorAll('.g-tab').forEach(t =>
-      t.classList.toggle('active', t.dataset.groupId === groupId)
+  _data.scenes.forEach(sc => {
+    const src = Marzipano.ImageUrlSource.fromString(sc.panoSrc);
+    const geo = new Marzipano.EquirectGeometry([{ width: 4096 }]);
+    const view = new Marzipano.RectilinearView(
+      { yaw: sc.initialYaw || 0, pitch: sc.initialPitch || 0, fov: (_data.navigation?.fov || 90) * Math.PI / 180 },
+      limiter
     );
-    _renderThumbs(groupId);
-  }
+    const mzScene = _viewer.createScene({ source: src, geometry: geo, view: view });
+    _scenes[sc.id] = { mzScene, data: sc };
+  });
+}
 
-  function _renderThumbs(groupId) {
-    const tRow = document.getElementById('t-row');
-    tRow.innerHTML = '';
-    const grp = tourData.groups.find(g => g.id === groupId);
-    if (!grp) return;
+// ─── 씬 전환 (페이드) ────────────────────────────────────
+function switchScene(id, fade = true) {
+  if (!_scenes[id]) return;
+  const fade$ = document.getElementById('fade');
 
-    grp.scenes.forEach(sc => {
-      const item = document.createElement('div');
-      item.className = 't-item' + (sc.id === _currentId ? ' active' : '');
-      item.dataset.sceneId = sc.id;
-      item.innerHTML = `
-        <div class="t-thumb">
-          ${sc.thumb
-            ? `<img src="${sc.thumb}" alt="${sc.name}">`
-            : `<span class="t-thumb-label">${sc.name.substring(0,6).toUpperCase()}</span>`}
-        </div>
-        <div class="t-name">${sc.name}</div>`;
-      item.addEventListener('click', () => goScene(sc.id));
-      tRow.appendChild(item);
-    });
-  }
-
-  function _updateThumbActive() {
-    document.querySelectorAll('.t-item').forEach(el =>
-      el.classList.toggle('active', el.dataset.sceneId === _currentId)
-    );
-    // 해당 씬이 속한 그룹 탭도 활성화
-    const grp = _findGroup(_currentId);
-    if (grp) _selectGroup(grp.id);
-  }
-
-  /* ── 그리드 빌드 ── */
-  function _buildGrid() {
-    const body = document.getElementById('grid-body');
-    body.innerHTML = '';
-    tourData.groups.forEach(grp => {
-      if (!grp.scenes.length) return;
-      const section = document.createElement('div');
-      section.innerHTML = `<div class="grid-group-label">${grp.name}</div>`;
-      const grid = document.createElement('div');
-      grid.className = 'grid-scenes';
-      grp.scenes.forEach(sc => {
-        const el = document.createElement('div');
-        el.className = 'grid-scene' + (sc.id === _currentId ? ' active' : '');
-        el.dataset.sceneId = sc.id;
-        el.innerHTML = `
-          <div class="grid-scene-thumb">
-            ${sc.thumb ? `<img src="${sc.thumb}" alt="">` : ''}
-          </div>
-          <div class="grid-scene-name">${sc.name}</div>`;
-        el.addEventListener('click', () => { goScene(sc.id); toggleGrid(); });
-        grid.appendChild(el);
-      });
-      section.appendChild(grid);
-      body.appendChild(section);
-    });
-  }
-
-  /* ── 씬 이동 ── */
-  function goScene(id) {
-    if (id === _currentId) { toggleGrid(); return; }
-    _fadeTransition(() => _goScene(id, true));
-  }
-
-  function _goScene(id, rebuild) {
-    const mScene = _scenes[id];
+  const doSwitch = () => {
+    _scenes[id].mzScene.switchTo();
     _currentId = id;
-
-    if (mScene) {
-      mScene.switchTo({ transitionDuration: 0 });
-    }
-
-    // 마커 렌더
-    _renderMarkers(id);
-
-    // 타이틀 업데이트
-    const sc = _findScene(id);
-    if (sc) {
-      const el = document.getElementById('scene-title');
-      if (el) el.textContent = tourData.settings.display?.sceneTitle
-        ? (tourData.title ? tourData.title + ' · ' : '') + sc.name
-        : '';
-    }
-
-    // 썸네일 활성 업데이트
-    _updateThumbActive();
-
-    // 그리드 활성 업데이트
-    document.querySelectorAll('.grid-scene').forEach(el =>
-      el.classList.toggle('active', el.dataset.sceneId === id)
-    );
-  }
-
-  /* ── 페이드 전환 ── */
-  function _fadeTransition(callback) {
-    const fade = document.getElementById('fade-screen');
-    fade.classList.add('fading');
-    setTimeout(() => {
-      callback();
-      setTimeout(() => fade.classList.remove('fading'), 300);
-    }, 300);
-  }
-
-  /* ── 마커 렌더 ── */
-  function _renderMarkers(sceneId) {
-    // 기존 마커 DOM 제거
-    document.querySelectorAll('.marker-wrap').forEach(el => el.remove());
-
-    const sc = _findScene(sceneId);
-    const mScene = _scenes[sceneId];
-    if (!sc?.markers?.length || !mScene) return;
-
-    sc.markers.forEach(m => {
-      // Marzipano hotspot으로 DOM 삽입
-      const wrap = document.createElement('div');
-      wrap.className = 'marker-wrap';
-
-      const isInfo = m.type === 'info';
-      wrap.innerHTML = `
-        ${m.label ? `<div class="marker-label">${m.label}</div>` : ''}
-        <div class="marker-circle ${isInfo ? 'info' : 'move'}">
-          ${isInfo
-            ? `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke="#5a3a00"/>
-               <line x1="12" y1="8" x2="12" y2="12" stroke="#5a3a00"/>
-               <circle cx="12" cy="16" r="0.8" fill="#5a3a00" stroke="none"/></svg>`
-            : `<svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7" stroke="#111"/></svg>`
-          }
-          <div class="marker-pulse ${isInfo ? 'info' : ''}"></div>
-        </div>`;
-
-      wrap.addEventListener('click', () => {
-        if (isInfo) {
-          _showInfoPopup(m);
-        } else if (m.destScene) {
-          goScene(m.destScene);
-        }
-      });
-
-      const yaw   = (m.yaw   || 0) * Math.PI / 180;
-      const pitch = (m.pitch || 0) * Math.PI / 180;
-
-      try {
-        mScene.hotspotContainer().createHotspot(wrap, { yaw, pitch });
-      } catch(e) {
-        console.warn('마커 생성 실패:', e);
-      }
-    });
-  }
-
-  /* ── 정보 팝업 ── */
-  function _showInfoPopup(marker) {
-    const popup = document.getElementById('info-popup');
-    const body  = document.getElementById('info-popup-body');
-
-    const linksHtml = (marker.links || []).map(l => `
-      <a class="info-link-btn" href="${l.url}" target="_blank" rel="noopener">
-        <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
-          <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
-        <span>${l.text || l.url}</span>
-        <span class="info-link-arrow">↗</span>
-      </a>`).join('');
-
-    body.innerHTML = `
-      ${marker.thumb ? `<div class="info-thumb"><img src="${marker.thumb}" alt=""></div>` : ''}
-      <div class="info-text">
-        <div class="info-title">${marker.label || ''}</div>
-        ${marker.desc ? `<div class="info-desc">${marker.desc}</div>` : ''}
-      </div>
-      ${linksHtml ? `<div class="info-links">${linksHtml}</div>` : ''}`;
-
-    popup.style.display = 'block';
-  }
-
-  function closeInfoPopup() {
-    document.getElementById('info-popup').style.display = 'none';
-  }
-
-  /* ── 설정 적용 ── */
-  function _applySettings() {
-    const s = tourData.settings;
-
-    // 제작자 표시
-    const wm = document.getElementById('watermark');
-    if (s.watermark?.show && s.watermark.name) {
-      const link = s.watermark.link
-        ? `<a href="${s.watermark.link}" ${s.watermark.newTab?'target="_blank"':''} rel="noopener">${s.watermark.name}</a>`
-        : s.watermark.name;
-      wm.innerHTML = link + (s.watermark.sub ? `<br><span style="font-size:10px;opacity:0.7;">${s.watermark.sub}</span>` : '');
-      wm.style.display = 'block';
-    }
-
-    // 로고 슬롯
-    const logoSize = s.logo?.size || 48;
-    ['tl','tr','bl','br'].forEach(pos => {
-      const src = s.logo?.slots?.[pos]?.src;
-      const el  = document.getElementById('logo-' + pos);
-      if (src) {
-        el.innerHTML = `<img src="${src}" width="${logoSize}" height="${logoSize}" alt="logo"
-                             style="border-radius:4px;object-fit:contain;">`;
-        el.style.display = 'block';
-        if (s.logo.action === 'home') el.querySelector('img').addEventListener('click', goHome);
-        if (s.logo.action === 'link' && s.logo.link)
-          el.querySelector('img').addEventListener('click', () => window.open(s.logo.link));
-      }
-    });
-
-    // 전체화면 버튼 숨기기
-    if (!s.display?.fullscreen) {
-      document.getElementById('btn-fs').style.display = 'none';
-    }
-
-    // 썸네일 네비 숨기기
-    if (!s.display?.thumbnail) {
-      document.getElementById('nav-box').style.display = 'none';
-    }
-  }
-
-  /* ── 홈 ── */
-  function goHome() {
-    const id = tourData.startScene || _firstSceneId();
-    goScene(id);
-  }
-
-  /* ── UI 토글 ── */
-  function toggleUI() {
-    _uiHidden = !_uiHidden;
-    document.body.classList.toggle('ui-hidden', _uiHidden);
-    document.getElementById('restore-fab').classList.toggle('show', _uiHidden);
-  }
-
-  /* ── 그리드 토글 ── */
-  function toggleGrid() {
-    const overlay = document.getElementById('grid-overlay');
-    const btn     = document.getElementById('btn-grid');
-    const show    = !overlay.classList.contains('show');
-    overlay.classList.toggle('show', show);
-    btn.classList.toggle('on', show);
-    if (show) _buildGrid(); // 씬 변경 반영
-  }
-
-  /* ── 프로젝션 팝업 ── */
-  function toggleProjMenu() {
-    _projPopupOpen = !_projPopupOpen;
-    document.getElementById('proj-popup').classList.toggle('show', _projPopupOpen);
-    document.getElementById('btn-proj').classList.toggle('on', _projPopupOpen);
-  }
-
-  function setProjection(type, el) {
-    document.querySelectorAll('.proj-option').forEach(o => o.classList.remove('active'));
-    el.classList.add('active');
-    _projPopupOpen = false;
-    document.getElementById('proj-popup').classList.remove('show');
-    document.getElementById('btn-proj').classList.remove('on');
-
-    // Marzipano 프로젝션 전환
-    if (!_viewer) return;
-    const view = _viewer.view();
-    if (!view) return;
-    // 현재 씬 뷰 가져와서 프로젝션 적용
-    // (Marzipano RectilinearView는 yaw/pitch/fov 변경으로 처리)
-  }
-
-  /* ── 전체화면 ── */
-  function toggleFullscreen() {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen?.();
-    } else {
-      document.exitFullscreen?.();
-    }
-  }
-
-  /* ── 시작 팝업 ── */
-  function _showStartPopup() {
-    const cfg = tourData.settings.popup;
-    if (!cfg?.enabled) return;
-
-    // 다시보지않기 체크
-    if (cfg.noAgain && localStorage.getItem('popup_dismissed') === '1') return;
-
-    const overlay = document.getElementById('start-popup-overlay');
-    const img     = document.getElementById('popup-img');
-    const timerEl = document.getElementById('popup-timer');
-
-    // 디바이스별 이미지
-    const isMobile = window.innerWidth < 768;
-    const src = isMobile ? cfg.mobileSrc : cfg.pcSrc;
-    if (src) {
-      img.src = src;
-      img.style.display = 'block';
-      if (cfg.linkUrl) img.style.cursor = 'pointer';
-      img.addEventListener('click', () => { if (cfg.linkUrl) window.open(cfg.linkUrl); });
-    }
-
-    // 딜레이
-    setTimeout(() => {
-      overlay.classList.remove('hide');
-
-      // 자동 닫힘 타이머
-      if (cfg.duration > 0) {
-        let remaining = cfg.duration;
-        timerEl.textContent = remaining + '초 후 닫힘';
-        _popupTimer = setInterval(() => {
-          remaining--;
-          timerEl.textContent = remaining + '초 후 닫힘';
-          if (remaining <= 0) { clearInterval(_popupTimer); closePopup(); }
-        }, 1000);
-      }
-    }, (cfg.delay || 0) * 1000);
-  }
-
-  function closePopup(e) {
-    if (e && e.target !== document.getElementById('start-popup-overlay')) return;
-    clearInterval(_popupTimer);
-    const overlay = document.getElementById('start-popup-overlay');
-    overlay.classList.add('hide');
-    if (document.getElementById('popup-no-again').checked) {
-      localStorage.setItem('popup_dismissed', '1');
-    }
-  }
-
-  /* ── 키보드 단축키 ── */
-  function _bindKeys() {
-    if (!tourData.settings.nav?.keyboard) return;
-    document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') { closeInfoPopup(); if (_projPopupOpen) toggleProjMenu(); }
-      if (e.key === 'g' || e.key === 'G') toggleGrid();
-      if (e.key === 'h' || e.key === 'H') toggleUI();
-      if (e.key === 'f' || e.key === 'F') toggleFullscreen();
-    });
-  }
-
-  /* ── 헬퍼 ── */
-  function _allScenes() { return tourData.groups.flatMap(g => g.scenes); }
-
-  function _firstSceneId() { return _allScenes()[0]?.id; }
-
-  function _findScene(id) {
-    for (const g of tourData.groups) {
-      const s = g.scenes.find(s => s.id === id);
-      if (s) return s;
-    }
-    return null;
-  }
-
-  function _findGroup(sceneId) {
-    return tourData.groups.find(g => g.scenes.some(s => s.id === sceneId));
-  }
-
-  return {
-    init,
-    goScene, goHome,
-    toggleUI, toggleGrid, toggleProjMenu, setProjection,
-    toggleFullscreen,
-    closePopup, closeInfoPopup,
+    renderHotspots(id);
+    updateNavUI(id);
+    updateSceneTitle(id);
+    closeInfoPopup();
   };
-})();
 
-/* ============================================================
-   진입점
-   ============================================================ */
-document.addEventListener('DOMContentLoaded', () => Viewer.init());
+  if (fade) {
+    fade$.classList.add('in');
+    setTimeout(() => {
+      doSwitch();
+      fade$.classList.remove('in');
+    }, 350);
+  } else {
+    doSwitch();
+  }
+}
+
+// ─── 핫스팟(마커) 렌더 ───────────────────────────────────
+function renderHotspots(sceneId) {
+  const { mzScene, data } = _scenes[sceneId];
+  // 기존 핫스팟 제거
+  mzScene.hotspotContainer().destroyAll();
+
+  (data.hotspots || []).forEach(hs => {
+    const el = createHotspotEl(hs);
+    mzScene.hotspotContainer().createHotspot(el, { yaw: hs.yaw * Math.PI / 180, pitch: hs.pitch * Math.PI / 180 });
+  });
+}
+
+function createHotspotEl(hs) {
+  const wrap = document.createElement('div');
+  wrap.className = 'hs-wrap';
+
+  // 라벨
+  if (hs.labelVisible) {
+    const lbl = document.createElement('div');
+    lbl.className = `hs-label ${hs.type}`;
+    lbl.textContent = hs.label || '';
+    wrap.appendChild(lbl);
+  }
+
+  // 원형 컨테이너
+  const inner = document.createElement('div');
+  inner.style.position = 'relative';
+  inner.style.width = '32px';
+  inner.style.margin = '0 auto';
+
+  // 펄스
+  const pulse = document.createElement('div');
+  pulse.className = `hs-pulse ${hs.type}`;
+  pulse.style.width = '32px';
+  pulse.style.height = '32px';
+  inner.appendChild(pulse);
+
+  // 원
+  const circle = document.createElement('div');
+  circle.className = `hs-circle ${hs.type}`;
+  circle.style.width = '32px';
+  circle.style.height = '32px';
+  circle.innerHTML = hs.type === 'link'
+    ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>`
+    : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5a3a00" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><circle cx="12" cy="16" r="0.6" fill="#5a3a00" stroke="none"/></svg>`;
+  inner.appendChild(circle);
+  wrap.appendChild(inner);
+
+  // 클릭 이벤트
+  wrap.addEventListener('click', e => {
+    e.stopPropagation();
+    if (hs.type === 'link') {
+      switchScene(hs.destScene);
+    } else {
+      openInfoPopup(hs);
+    }
+  });
+
+  return wrap;
+}
+
+// ─── 그룹 탭 + 썸네일 렌더 ───────────────────────────────
+function renderGroups() {
+  const gRow = document.getElementById('g-row');
+  const tRow = document.getElementById('t-row');
+  const groups = _data.groups || [];
+
+  gRow.innerHTML = '';
+  groups.forEach((g, i) => {
+    const tab = document.createElement('div');
+    tab.className = 'g-tab' + (i === 0 ? ' active' : '');
+    tab.textContent = g.name;
+    tab.dataset.gid = g.id;
+    tab.addEventListener('click', () => selectGroup(g.id, tab));
+    gRow.appendChild(tab);
+  });
+
+  // 첫 그룹 썸네일 렌더
+  if (groups.length) renderThumbs(groups[0].id);
+}
+
+function selectGroup(gid, tabEl) {
+  document.querySelectorAll('.g-tab').forEach(t => t.classList.remove('active'));
+  tabEl.classList.add('active');
+  renderThumbs(gid);
+}
+
+function renderThumbs(gid) {
+  const tRow = document.getElementById('t-row');
+  tRow.innerHTML = '';
+  const scenes = _data.scenes.filter(s => s.groupId === gid);
+
+  scenes.forEach(sc => {
+    const wrap = document.createElement('div');
+    wrap.className = 'thumb' + (sc.id === _currentId ? ' active' : '');
+    wrap.dataset.sid = sc.id;
+
+    // 이미지 or fallback
+    const imgEl = document.createElement('img');
+    imgEl.src = sc.thumbSrc;
+    imgEl.alt = sc.name;
+    imgEl.onerror = function() {
+      this.style.display = 'none';
+      const fb = document.createElement('div');
+      fb.className = 'thumb-fallback';
+      fb.textContent = sc.name.slice(0, 2);
+      wrap.insertBefore(fb, wrap.firstChild);
+    };
+    wrap.appendChild(imgEl);
+
+    const name = document.createElement('div');
+    name.className = 'thumb-name';
+    name.textContent = sc.name;
+    wrap.appendChild(name);
+
+    wrap.addEventListener('click', () => switchScene(sc.id));
+    tRow.appendChild(wrap);
+  });
+}
+
+// ─── 씬 전환 시 UI 업데이트 ──────────────────────────────
+function updateNavUI(id) {
+  // 썸네일 active 표시
+  document.querySelectorAll('.thumb').forEach(el => {
+    el.classList.toggle('active', el.dataset.sid === id);
+  });
+
+  // 그리드 아이템 active 표시
+  document.querySelectorAll('.grid-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.sid === id);
+  });
+
+  // 해당 씬의 그룹 탭 활성화
+  const sc = _data.scenes.find(s => s.id === id);
+  if (!sc) return;
+  const gid = sc.groupId;
+  const tabs = document.querySelectorAll('.g-tab');
+  let targetTab = null;
+  tabs.forEach(t => {
+    if (t.dataset.gid === gid) targetTab = t;
+    t.classList.remove('active');
+  });
+  if (targetTab) {
+    targetTab.classList.add('active');
+    renderThumbs(gid);
+    // 전환 후 thumb active 재설정
+    setTimeout(() => {
+      document.querySelectorAll('.thumb').forEach(el => {
+        el.classList.toggle('active', el.dataset.sid === id);
+      });
+    }, 10);
+  }
+}
+
+function updateSceneTitle(id) {
+  const sc = _data.scenes.find(s => s.id === id);
+  if (!sc) return;
+  const titleEl = document.getElementById('scene-title');
+  const tourTitle = _data.tour.title || '가상투어';
+  titleEl.textContent = `${tourTitle} · ${sc.name}`;
+}
+
+// ─── 브랜딩 적용 ─────────────────────────────────────────
+function applyBranding() {
+  const b = _data.branding;
+
+  // 로고
+  const logoBtn = document.getElementById('logo-btn');
+  const tl = b?.logos?.tl;
+  if (tl?.src) {
+    logoBtn.innerHTML = `<img src="${tl.src}" alt="로고">`;
+    if (tl.link) {
+      logoBtn.style.cursor = 'pointer';
+      logoBtn.onclick = () => window.open(tl.link, '_blank');
+    }
+  } else {
+    // 기본 로고 SVG
+    logoBtn.innerHTML = `<svg width="17" height="17" viewBox="0 0 26 26" fill="none"><circle cx="13" cy="13" r="11" stroke="#1a6fc4" stroke-width="1.5"/><path d="M8 13L13 7L18 13" stroke="#1a6fc4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="13" cy="14" r="3" fill="#1a6fc4" opacity="0.65"/></svg>`;
+  }
+
+  // 제작자 표시
+  const wm = b?.watermark;
+  const wmEl = document.getElementById('watermark');
+  if (wm?.show && wm.name) {
+    const inner = wm.linkEnabled && wm.url
+      ? `<a href="${wm.url}" target="${wm.newTab ? '_blank' : '_self'}">${wm.name}${wm.sub ? '<br>' + wm.sub : ''}</a>`
+      : `${wm.name}${wm.sub ? '<br>' + wm.sub : ''}`;
+    wmEl.innerHTML = `제작<br>${inner}`;
+    wmEl.style.display = '';
+  } else {
+    wmEl.style.display = 'none';
+  }
+}
+
+function applyBarrier() {
+  const bar = _data.branding?.barrier;
+  const el = document.getElementById('barrier');
+  if (!bar?.show) return;
+  const h = bar.mode === 'auto' ? 48 : (bar.height || 40);
+  const op = (bar.opacity || 85) / 100;
+  el.style.height = h + 'px';
+  el.style.background = `rgba(0,0,0,${op})`;
+  el.style.display = 'block';
+}
+
+// ─── 그리드 오버레이 ─────────────────────────────────────
+function buildGridOverlay() {
+  const body = document.getElementById('grid-body');
+  body.innerHTML = '';
+  const groups = _data.groups || [];
+
+  groups.forEach(g => {
+    const scenes = _data.scenes.filter(s => s.groupId === g.id);
+    if (!scenes.length) return;
+
+    const section = document.createElement('div');
+    const lbl = document.createElement('div');
+    lbl.className = 'grid-label';
+    lbl.textContent = g.name;
+    section.appendChild(lbl);
+
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:5px;';
+
+    scenes.forEach(sc => {
+      const item = document.createElement('div');
+      item.className = 'grid-item' + (sc.id === _currentId ? ' active' : '');
+      item.dataset.sid = sc.id;
+
+      const img = document.createElement('img');
+      img.src = sc.thumbSrc;
+      img.alt = sc.name;
+      img.onerror = function() {
+        this.style.display = 'none';
+        const fb = document.createElement('div');
+        fb.className = 'grid-item-fallback';
+        item.insertBefore(fb, item.firstChild);
+      };
+      item.appendChild(img);
+
+      const name = document.createElement('div');
+      name.className = 'grid-item-name';
+      name.textContent = sc.name;
+      item.appendChild(name);
+
+      item.addEventListener('click', () => {
+        toggleGrid();
+        switchScene(sc.id);
+      });
+      grid.appendChild(item);
+    });
+
+    section.appendChild(grid);
+    body.appendChild(section);
+  });
+}
+
+function toggleGrid() {
+  _gridOpen = !_gridOpen;
+  const overlay = document.getElementById('grid-overlay');
+  const btn = document.getElementById('grid-btn');
+  if (_gridOpen) {
+    buildGridOverlay();
+    overlay.classList.add('show');
+    btn.classList.add('on');
+  } else {
+    overlay.classList.remove('show');
+    btn.classList.remove('on');
+  }
+  if (_projOpen) closeProj();
+}
+
+// ─── 프로젝션 팝업 ───────────────────────────────────────
+function toggleProj() {
+  _projOpen = !_projOpen;
+  document.getElementById('proj-popup').classList.toggle('show', _projOpen);
+  document.getElementById('proj-btn').classList.toggle('on', _projOpen);
+}
+
+function closeProj() {
+  _projOpen = false;
+  document.getElementById('proj-popup').classList.remove('show');
+  document.getElementById('proj-btn').classList.remove('on');
+}
+
+function selectProj(mode, el) {
+  document.querySelectorAll('#proj-popup .po').forEach(o => o.classList.remove('on'));
+  el.classList.add('on');
+  closeProj();
+
+  if (!_viewer) return;
+  if (mode === 'n') {
+    _viewer.setStageType(Marzipano.WebGlStage);
+  } else if (mode === 'm') {
+    // Mirror ball — 구형 프로젝션
+    _viewer.setStageType && _viewer.setStageType(Marzipano.WebGlStage);
+  } else if (mode === 'p') {
+    // Little planet — pitch를 -90으로
+    const sc = _scenes[_currentId];
+    if (sc) sc.mzScene.view().setParameters({ pitch: -Math.PI / 2, fov: 2.0 });
+  }
+}
+
+// ─── UI 숨기기 ───────────────────────────────────────────
+function toggleHide() {
+  _uiHidden = !_uiHidden;
+  document.body.classList.toggle('ui-hidden', _uiHidden);
+  document.getElementById('restore-btn').classList.toggle('vis', _uiHidden);
+}
+
+// ─── 홈으로 ─────────────────────────────────────────────
+function goHome() {
+  const startId = _data.tour.startScene || _data.scenes[0].id;
+  switchScene(startId);
+}
+
+// ─── 전체화면 ────────────────────────────────────────────
+function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    document.documentElement.requestFullscreen();
+  }
+}
+
+// ─── 정보 팝업 ───────────────────────────────────────────
+function openInfoPopup(hs) {
+  const popup = document.getElementById('info-popup');
+  const c = hs.content || {};
+  let html = `<div class="popup-close" onclick="closeInfoPopup()"><svg viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg></div>`;
+
+  // 슬라이드 이미지
+  const imgs = c.images || [];
+  if (imgs.length) {
+    _slideData = imgs;
+    _slideIdx = 0;
+    html += `<div class="slide-area" style="height:130px;" id="slide-area">
+      <img id="slide-img" src="${imgs[0]}" alt="">
+      ${imgs.length > 1 ? `
+      <div class="slide-arr" style="left:5px;" onclick="changeSlide(-1)"><svg viewBox="0 0 14 14"><path d="M9 2L4 7L9 12"/></svg></div>
+      <div class="slide-arr" style="right:5px;" onclick="changeSlide(1)"><svg viewBox="0 0 14 14"><path d="M5 2L10 7L5 12"/></svg></div>
+      <div class="slide-nav" id="slide-nav">${imgs.map((_,i)=>`<div class="slide-dot${i===0?' on':''}" onclick="goSlide(${i})"></div>`).join('')}</div>
+      ` : ''}
+    </div>`;
+  }
+
+  // 텍스트
+  if (c.title || c.desc) {
+    html += `<div class="popup-body">`;
+    if (c.title) html += `<div class="popup-title">${c.title}</div>`;
+    if (c.desc) html += `<div class="popup-desc">${c.desc}</div>`;
+    html += `</div>`;
+  }
+
+  // 유튜브
+  if (c.youtube) {
+    const vid = extractYtId(c.youtube);
+    html += `<div style="padding:0 12px 8px;">
+      <div class="yt-area" style="height:80px;border-radius:7px;overflow:hidden;" onclick="window.open('https://youtube.com/watch?v=${vid}','_blank')">
+        <img src="https://img.youtube.com/vi/${vid}/mqdefault.jpg" style="width:100%;height:100%;object-fit:cover;opacity:0.6;">
+        <div style="position:absolute;"><div class="yt-play"><svg viewBox="0 0 24 24"><path d="M8 5l11 7-11 7V5z"/></svg></div></div>
+      </div>
+    </div>`;
+  }
+
+  // 링크 버튼
+  if (c.link?.url) {
+    html += `<div style="padding:0 12px 10px;">
+      <a class="link-btn" href="${c.link.url}" target="_blank">
+        <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+        <span class="link-btn-text">${c.link.text || '링크 바로가기'}</span>
+        <span class="link-btn-arrow">↗</span>
+      </a>
+    </div>`;
+  }
+
+  popup.innerHTML = html;
+  popup.classList.add('show');
+}
+
+function closeInfoPopup() {
+  document.getElementById('info-popup').classList.remove('show');
+}
+
+function changeSlide(d) {
+  _slideIdx = (_slideIdx + d + _slideData.length) % _slideData.length;
+  updateSlide();
+}
+function goSlide(i) { _slideIdx = i; updateSlide(); }
+function updateSlide() {
+  const img = document.getElementById('slide-img');
+  if (img) img.src = _slideData[_slideIdx];
+  const dots = document.querySelectorAll('#slide-nav .slide-dot');
+  dots.forEach((dot, i) => dot.classList.toggle('on', i === _slideIdx));
+}
+
+function extractYtId(url) {
+  const m = url.match(/(?:v=|youtu\.be\/)([^&?/]+)/);
+  return m ? m[1] : '';
+}
+
+// ─── 시작 팝업 ───────────────────────────────────────────
+function showStartPopup() {
+  // 추후 구현 (이미지 없으면 스킵)
+  const sp = _data.startPopup;
+  const isMobile = window.innerWidth < 600;
+  const src = isMobile ? sp.mobile?.src : sp.pc?.src;
+  if (!src) return;
+  // TODO: 시작 팝업 UI
+}
+
+// ─── 로딩 숨기기 ─────────────────────────────────────────
+function hideLoader() {
+  const l = document.getElementById('loader');
+  l.classList.add('hide');
+  setTimeout(() => l.style.display = 'none', 400);
+}
+
+// ─── 외부 클릭 시 팝업 닫기 ──────────────────────────────
+document.addEventListener('click', e => {
+  const pp = document.getElementById('proj-popup');
+  const pb = document.getElementById('proj-btn');
+  if (_projOpen && pp && !pp.contains(e.target) && !pb.contains(e.target)) closeProj();
+});
+
+// ─── 실행 ────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', init);
