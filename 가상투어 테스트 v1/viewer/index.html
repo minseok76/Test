@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>가상투어</title>
+<link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+
+<!-- 파노라마 컨테이너 -->
+<div id="pano"></div>
+
+<!-- 페이드 오버레이 -->
+<div id="fade-overlay"></div>
+
+<!-- 로딩 화면 -->
+<div id="loading">
+  <div class="spinner"></div>
+  <p>LOADING</p>
+</div>
+
+<!-- 상단 UI (로고) -->
+<div id="top-ui">
+  <!-- 로고는 JS에서 branding.logos 기반으로 동적 삽입 -->
+</div>
+
+<!-- 제작자 표시 -->
+<div id="watermark"></div>
+
+<!-- 하단 그라디언트 -->
+<div id="bottom-grad"></div>
+
+<!-- ── 하단 UI ── -->
+<div id="bottom-ui">
+
+  <!-- 씬 타이틀 -->
+  <div id="scene-title"></div>
+
+  <!-- 네비게이션 박스 -->
+  <div id="nav-box">
+    <div id="group-row"></div>
+    <div id="thumb-row"></div>
+  </div>
+
+  <!-- 콘솔 버튼 행 -->
+  <div id="console-row">
+    <div class="console-bar">
+
+      <!-- 홈 -->
+      <button class="con-btn" id="btn-home" onclick="goHome()" title="처음 장면">
+        <svg viewBox="0 0 24 24"><path d="M3 9.5L12 3L21 9.5V20a1 1 0 01-1 1H15v-5h-6v5H4a1 1 0 01-1-1V9.5z"/></svg>
+      </button>
+
+      <div class="con-sep"></div>
+
+      <!-- 그리드 -->
+      <button class="con-btn" id="btn-grid" onclick="toggleGrid()" title="전체 장면">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      </button>
+
+      <div class="con-sep"></div>
+
+      <!-- 프로젝션 -->
+      <button class="con-btn" id="btn-proj" onclick="toggleProj()" title="프로젝션">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="4"/><line x1="3" y1="12" x2="21" y2="12"/></svg>
+      </button>
+
+      <div class="con-sep"></div>
+
+      <!-- 전체화면 -->
+      <button class="con-btn" id="btn-fs" onclick="toggleFullscreen()" title="전체화면">
+        <svg viewBox="0 0 24 24"><path d="M4 8V4h4M16 4h4v4M4 16v4h4M20 16v4h-4"/></svg>
+      </button>
+
+    </div>
+
+    <!-- UI 숨기기 -->
+    <div class="hide-btn" onclick="toggleUI()" title="UI 숨기기">
+      <svg viewBox="0 0 14 14" stroke-width="2"><path d="M2 4l5 5 5-5"/></svg>
+    </div>
+
+    <!-- 프로젝션 팝업 -->
+    <div id="proj-popup">
+      <div class="proj-opt active" onclick="setProjection('normal', this)">
+        <div class="proj-icon"><svg viewBox="0 0 24 24"><polygon points="12,3 22,20 2,20"/></svg></div>
+        <span class="proj-label">Normal</span>
+      </div>
+      <div class="proj-opt" onclick="setProjection('mirror', this)">
+        <div class="proj-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="9" ry="4"/></svg></div>
+        <span class="proj-label">Mirror Ball</span>
+      </div>
+      <div class="proj-opt" onclick="setProjection('planet', this)">
+        <div class="proj-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="17" r="6"/><path d="M6 17 Q12 2 18 17"/></svg></div>
+        <span class="proj-label">Little Planet</span>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /#bottom-ui -->
+
+<!-- UI 복원 버튼 -->
+<div id="restore-btn" onclick="toggleUI()" title="UI 복원">
+  <svg viewBox="0 0 14 14" stroke-width="2"><path d="M2 10l5-5 5 5"/></svg>
+</div>
+
+<!-- ── 그리드 오버레이 ── -->
+<div id="grid-overlay">
+  <div id="grid-header">
+    <span>전체 장면</span>
+    <div class="grid-close-btn" onclick="toggleGrid(false)">닫기 ✕</div>
+  </div>
+  <div id="grid-content"></div>
+</div>
+
+<!-- ── 정보 마커 팝업 ── -->
+<div id="info-popup">
+  <div class="popup-close-btn" onclick="closeInfoPopup()">
+    <svg viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg>
+  </div>
+  <div class="popup-slide-area"></div>
+  <div class="popup-body">
+    <div class="popup-title"></div>
+    <div class="popup-desc"></div>
+  </div>
+  <div class="popup-youtube" style="display:none"></div>
+  <div class="popup-links"></div>
+</div>
+
+<!-- ── 시작 팝업 ── -->
+<div id="start-popup">
+  <div class="sp-modal"></div>
+</div>
+
+<!-- Marzipano -->
+<script src="https://cdn.jsdelivr.net/npm/marzipano@0.10.2/dist/marzipano.js"></script>
+
+<!-- Viewer 초기화 -->
+<script type="module">
+  import '../config.js';
+  import './viewer.js';
+  window.onViewerLoad();
+</script>
+
+</body>
+</html>

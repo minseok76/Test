@@ -1,0 +1,136 @@
+{
+  "_schema": "1.0.0",
+  "tour": {
+    "id": "ajou-youth-center",
+    "title": "아주청소년문화의집 가상투어",
+    "subtitle": "",
+    "startSceneId": "scene_entrance",
+    "autoRotate": true,
+    "autoRotateSpeed": 0.3,
+    "defaultFov": 90
+  },
+  "security": {
+    "editorPin": "1234",
+    "monitorPin": "5678",
+    "showHint": false
+  },
+  "display": {
+    "showSceneTitle": true,
+    "showCoords": false,
+    "showNavigation": true,
+    "showFullscreenBtn": true,
+    "defaultProjection": "normal"
+  },
+  "navigation": {
+    "fov": { "min": 30, "max": 120, "default": 90 },
+    "mouseSensitivity": 1.0,
+    "keyboardControl": true,
+    "gyroscope": true
+  },
+  "branding": {
+    "logos": [],
+    "watermark": {
+      "show": true,
+      "name": "아주청소년운영위원회 조타",
+      "subtext": "",
+      "linkEnabled": true,
+      "linkUrl": "https://www.youth.kr",
+      "linkNewTab": true
+    },
+    "barrier": { "show": true, "heightMode": "auto", "customHeight": 40, "opacity": 85, "color": "#000000" },
+    "nadirPatch": { "enabled": false, "src": "", "size": 25, "opacity": 1.0, "pitch": -90 }
+  },
+  "startPopup": {
+    "enabled": false,
+    "delayMs": 500,
+    "autoCloseMs": 5000,
+    "showDontShowAgain": true,
+    "pc": { "imageSrc": "", "linkUrl": "" },
+    "mobile": { "imageSrc": "", "linkUrl": "" }
+  },
+  "groups": [
+    { "id": "group_outdoor", "label": "외부", "color": "#50A0DC" },
+    { "id": "group_1f",      "label": "1층",  "color": "#C87850" },
+    { "id": "group_2f",      "label": "2층",  "color": "#B4C850" }
+  ],
+  "scenes": [
+    {
+      "id": "scene_entrance",
+      "groupId": "group_outdoor",
+      "label": "정문",
+      "panoSrc": "assets/panos/sample.jpg",
+      "thumbSrc": "assets/thumbs/sample.jpg",
+      "initialView": { "yaw": 0, "pitch": 0, "fov": 90 },
+      "hotspots": [
+        {
+          "id": "hs_to_lobby",
+          "type": "link",
+          "yaw": 30, "pitch": -5,
+          "targetSceneId": "scene_lobby",
+          "label": "내부로 이동",
+          "labelMode": "always"
+        },
+        {
+          "id": "hs_info_entrance",
+          "type": "info",
+          "yaw": -40, "pitch": 5,
+          "label": "시설 안내",
+          "labelMode": "hover",
+          "content": {
+            "title": "아주청소년문화의집",
+            "description": "청소년들을 위한 다목적 문화·활동 공간입니다.",
+            "images": [],
+            "youtubeUrl": "",
+            "links": [
+              { "id": "lnk1", "label": "공식 홈페이지", "url": "https://www.youth.kr", "newTab": true }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "scene_lobby",
+      "groupId": "group_1f",
+      "label": "로비",
+      "panoSrc": "assets/panos/sample.jpg",
+      "thumbSrc": "assets/thumbs/sample.jpg",
+      "initialView": { "yaw": 0, "pitch": 0, "fov": 90 },
+      "hotspots": [
+        {
+          "id": "hs_back_entrance",
+          "type": "link",
+          "yaw": 180, "pitch": -5,
+          "targetSceneId": "scene_entrance",
+          "label": "정문으로",
+          "labelMode": "always"
+        }
+      ]
+    },
+    {
+      "id": "scene_playroom",
+      "groupId": "group_2f",
+      "label": "플레이실",
+      "panoSrc": "assets/panos/sample.jpg",
+      "thumbSrc": "assets/thumbs/sample.jpg",
+      "initialView": { "yaw": 0, "pitch": 0, "fov": 90 },
+      "hotspots": [
+        {
+          "id": "hs_info_play",
+          "type": "info",
+          "yaw": 10, "pitch": 0,
+          "label": "플레이실 안내",
+          "labelMode": "hover",
+          "content": {
+            "title": "플레이실",
+            "description": "청소년들을 위한 다목적 활동 공간입니다.",
+            "images": [],
+            "youtubeUrl": "",
+            "links": [
+              { "id": "lnk2", "label": "예약하기", "url": "https://www.youth.kr/reserve", "newTab": true }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

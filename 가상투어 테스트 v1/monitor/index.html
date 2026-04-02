@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>모니터링</title>
+<link rel="stylesheet" href="monitor.css">
+</head>
+<body>
+
+<!-- PIN 화면 -->
+<div id="pin-screen">
+  <div class="pin-title">MONITOR ACCESS</div>
+  <input class="pin-input" id="pin-input" type="password" maxlength="8" placeholder="••••"
+         onkeydown="if(event.key==='Enter') checkPin()">
+  <div class="pin-err" id="pin-err">PIN이 올바르지 않습니다</div>
+  <div class="pin-btn" onclick="checkPin()">확인</div>
+</div>
+
+<div id="root">
+
+  <!-- 헤더 -->
+  <div id="header">
+    <div class="h-left">
+      <div class="h-badge">MONITOR</div>
+      <div class="h-title">—</div>
+      <div style="display:flex;align-items:center;gap:4px;margin-left:4px;">
+        <div class="live-dot"></div>
+        <span class="live-txt">실시간</span>
+      </div>
+    </div>
+    <div class="h-right">
+      <div class="period-btn on" onclick="setPeriod('today', this)">오늘</div>
+      <div class="period-btn" onclick="setPeriod('7d', this)">7일</div>
+      <div class="period-btn" onclick="setPeriod('30d', this)">30일</div>
+      <div class="period-btn" onclick="setPeriod('all', this)">전체</div>
+      <div class="h-close" onclick="history.back()">
+        <svg viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- 메인 -->
+  <div id="main">
+
+    <!-- KPI 4개 -->
+    <div class="kpi-row">
+      <div class="kpi">
+        <div class="kpi-label">총 방문자</div>
+        <div class="kpi-val" id="kpi-total">—</div>
+        <div class="kpi-sub" id="kpi-total-sub"></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">오늘 방문자</div>
+        <div class="kpi-val" id="kpi-today">—</div>
+        <div class="kpi-sub" id="kpi-today-sub">실시간</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">평균 체류시간</div>
+        <div class="kpi-val" id="kpi-dur">—</div>
+        <div class="kpi-sub" id="kpi-dur-sub"></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">마커 클릭</div>
+        <div class="kpi-val" id="kpi-click">—</div>
+        <div class="kpi-sub kpi-sub" id="kpi-click-sub"></div>
+      </div>
+    </div>
+
+    <!-- 중간: 시간대 차트 + TOP5 씬 -->
+    <div class="mid-row">
+
+      <div class="card">
+        <div class="card-title">시간대별 방문</div>
+        <div class="bar-chart" id="bar-chart"></div>
+        <div style="display:flex;justify-content:space-between;margin-top:5px;">
+          <span style="font-size:7px;color:rgba(255,255,255,0.22)">00시</span>
+          <span style="font-size:7px;color:rgba(255,255,255,0.22)">06시</span>
+          <span style="font-size:7px;color:rgba(255,255,255,0.22)">12시</span>
+          <span style="font-size:7px;color:rgba(255,255,255,0.22)">18시</span>
+          <span style="font-size:7px;color:rgba(255,255,255,0.22)">23시</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">장면별 조회 TOP 5</div>
+        <div id="scene-list"></div>
+      </div>
+
+    </div>
+
+    <!-- 하단: 기기 비율 + 마커 클릭 + 지역 + 유입/로그 -->
+    <div class="bot-row">
+
+      <!-- 기기 비율 (도넛) -->
+      <div class="card">
+        <div class="card-title">기기 비율</div>
+        <div class="donut-wrap">
+          <svg width="54" height="54" viewBox="0 0 54 54" id="donut-svg"
+               style="transform:rotate(-90deg);flex-shrink:0;">
+          </svg>
+          <div class="donut-legend" id="donut-legend"></div>
+        </div>
+      </div>
+
+      <!-- 마커 클릭 순위 -->
+      <div class="card">
+        <div class="card-title">마커 클릭 순위</div>
+        <div id="marker-list"></div>
+      </div>
+
+      <!-- 지역별 접속 -->
+      <div class="card">
+        <div class="card-title">지역별 접속</div>
+        <div id="region-list"></div>
+      </div>
+
+      <!-- 유입 경로 + 최근 방문 -->
+      <div class="card">
+        <div class="card-title">유입 경로</div>
+        <div id="source-list"></div>
+        <div style="margin-top:8px;padding-top:8px;border-top:0.5px solid rgba(255,255,255,0.06)">
+          <div style="font-size:9px;color:rgba(255,255,255,0.28);margin-bottom:4px">최근 방문</div>
+          <div id="log-list"></div>
+        </div>
+      </div>
+
+    </div>
+
+  </div><!-- /#main -->
+
+</div><!-- /#root -->
+
+<!-- Firebase SDK (실제 사용 시 프로젝트 설정으로 교체) -->
+<!-- <script src="https://www.gstatic.com/firebasejs/9.x.x/firebase-app-compat.js"></script> -->
+<!-- <script src="https://www.gstatic.com/firebasejs/9.x.x/firebase-firestore-compat.js"></script> -->
+
+<script type="module" src="monitor.js"></script>
+
+<script>
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.shiftKey && e.key === 'S') {
+    document.getElementById('pin-screen').classList.remove('hide');
+  }
+});
+</script>
+
+</body>
+</html>
